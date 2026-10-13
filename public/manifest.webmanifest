@@ -1,7 +1,7 @@
 {
   "name": "Card Vault",
   "short_name": "Card Vault",
-  "description": "Scan Pokémon and Yu-Gi-Oh! cards into your collection",
+  "description": "Scan Pokémon, Yu-Gi-Oh!, Magic and Lorcana cards into your collection",
   "start_url": "./#scan",
   "display": "standalone",
   "background_color": "#0f1115",

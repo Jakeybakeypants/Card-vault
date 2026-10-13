@@ -1,7 +1,7 @@
 # Card Vault
 
 Scan your trading cards with your phone's camera and they go straight into your collection
-database. Pokémon and Yu-Gi-Oh! are supported. It's a web app: no install, no account, and
+database. Pokémon, Yu-Gi-Oh!, Magic: The Gathering and Disney Lorcana are supported. It's a web app: no install, no account, and
 your collection stays on your device.
 
 <p>
@@ -32,6 +32,10 @@ which still works over plain HTTP.
      (`SVI EN 063/198`, `4/102`, `TG05/TG30`, `SWSH050`).
    - **Yu-Gi-Oh!**: the name banner, the set code under the artwork (`LOB-EN005`), the
      1st Edition/Limited Edition stamp, and the 8-digit passcode.
+   - **Magic**: the name, plus the collector line bottom-left (`0123 R` / `M21 • EN`, or
+     `123/269` on 2015–2019 cards).
+   - **Lorcana**: the name and version banner, plus `12/204 • EN • 1` bottom-left (number / set
+     size, language, set).
 3. It looks those up in the card database and ranks the matches.
 4. **One clear match** (number + set + name agree): the card is added immediately, with an
    **Undo** toast, and the camera stays ready for the next card.
@@ -70,8 +74,10 @@ Owning any variant, rarity or condition of a collector number fills that slot.
 | --- | --- | --- |
 | Pokémon | [pokemontcg.io](https://pokemontcg.io) API v2, with [TCGdex](https://tcgdex.dev) as a fallback | TCGplayer market price per variant |
 | Yu-Gi-Oh! | [YGOPRODeck](https://ygoprodeck.com/api-guide/) API v7 | TCGplayer price per printing |
+| Magic | [Scryfall](https://scryfall.com/docs/api) | USD normal / foil / etched |
+| Lorcana | [Lorcast](https://lorcast.com/docs/api) | USD normal / foil |
 
-Both are free and need no key. A free pokemontcg.io key (Settings) raises its rate limit.
+All are free and need no key. A free pokemontcg.io key (Settings) raises its rate limit.
 Card images are cached in the browser when you add a card, so the collection works offline and
 doesn't keep re-downloading images from the catalogs.
 
@@ -95,12 +101,12 @@ Collection tab you can:
 | OCR (adaptive threshold → Tesseract) | `src/scan/ocr.ts` |
 | AI reader | `src/scan/ai.ts` |
 | Scan → candidates | `src/scan/recognize.ts` |
-| Catalogs | `src/games/pokemon.ts`, `src/games/yugioh.ts`, ranking in `src/games/game.ts` |
+| Catalogs | `src/games/pokemon.ts`, `yugioh.ts`, `mtg.ts`, `lorcana.ts`, ranking in `src/games/game.ts` |
 | Collection DB, export | `src/db/store.ts`, `src/db/exchange.ts` |
 | Set completion (binder) | `src/db/progress.ts` (pure, unit-tested), `src/ui/binderView.ts` |
 | UI | `src/ui/*` (no framework), `src/style.css` |
 
-Adding another game (Magic, One Piece, Lorcana…) means one new file in `src/games/` that
+Adding another game (One Piece, Flesh and Blood…) means one new file in `src/games/` that
 implements the `Game` interface (OCR regions, a parser, and catalog lookup/search), plus its
 entry in `src/games/index.ts`.
 

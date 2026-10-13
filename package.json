@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Scan trading cards with your phone camera and keep a collection database (Pokémon, Yu-Gi-Oh!)",
+  "description": "Scan trading cards with your phone camera and keep a collection database (Pokémon, Yu-Gi-Oh!, Magic, Lorcana)",
   "scripts": {
     "dev": "vite",
     "dev:phone": "vite --mode phone",

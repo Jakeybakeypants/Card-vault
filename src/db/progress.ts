@@ -3,7 +3,8 @@ import { stripLeadingZeros } from '../util/text';
 
 /**
  * Set completion: which slots of a set the collection fills. A slot is one collector number
- * (Pokémon `25`, Yu-Gi-Oh! `LOB-EN005`); owning any variant, rarity or condition of it fills it.
+ * (Pokémon `25`, Yu-Gi-Oh! `LOB-EN005`, Magic `123`, Lorcana `12`); owning any variant, rarity
+ * or condition of it fills it.
  */
 
 export interface SetSlot {
@@ -35,6 +36,7 @@ function keySet(key: string): string {
 export function entryInSet(e: CollectionEntry, set: CardSet): boolean {
   if (e.card.game !== set.game) return false;
   if (set.game === 'yugioh') return e.card.setName === set.name;
+  if (set.game !== 'pokemon') return e.card.setCode.toUpperCase() === set.code.toUpperCase();
   const setId = set.id.replace(/^dex:/, '');
   if (keySet(e.card.key) === setId) return true;
   // Entries from the other Pokémon catalog have different ids; fall back to the set name.

@@ -68,7 +68,7 @@ export function settingsView(): View {
     h(
       'p',
       { class: 'muted small' },
-      'Pokémon data and prices: pokemontcg.io (TCGplayer market prices), with TCGdex as a fallback. Yu-Gi-Oh! data and prices: YGOPRODeck. Your collection is stored on this device only. Use Back up on the Collection tab to keep a copy.',
+      'Pokémon data and prices: pokemontcg.io (TCGplayer market prices), with TCGdex as a fallback. Yu-Gi-Oh! data and prices: YGOPRODeck. Magic: Scryfall. Lorcana: Lorcast. Your collection is stored on this device only. Use Back up on the Collection tab to keep a copy.',
     ),
 
     h('h2', null, 'Danger zone'),

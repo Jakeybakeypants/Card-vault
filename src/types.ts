@@ -1,13 +1,13 @@
-export type GameId = 'pokemon' | 'yugioh';
+export type GameId = 'pokemon' | 'yugioh' | 'mtg' | 'lorcana';
 
 /** One exact printing of a card, as returned by a catalog source. */
 export interface CardPrinting {
   game: GameId;
-  /** Stable id for this printing: `sv1-25` (Pokémon), `LOB-EN005:Ultra Rare` (Yu-Gi-Oh!). */
+  /** Stable id for this printing: `sv1-25` (Pokémon), `LOB-EN005:Ultra Rare` (Yu-Gi-Oh!), `m21-123` (Magic), `1-12` (Lorcana). */
   key: string;
   name: string;
   setName: string;
-  /** Short set code: `sv1` / `PAL` for Pokémon, `LOB` for Yu-Gi-Oh!. */
+  /** Short set code: `sv1` / `PAL` for Pokémon, `LOB` for Yu-Gi-Oh!, `M21` for Magic, `1` for Lorcana. */
   setCode: string;
   /** Collector number as printed: `25/198`, `TG05/TG30`, `LOB-EN005`. */
   number: string;
@@ -79,7 +79,7 @@ export interface Candidate {
 /** A set / expansion, as listed by a catalog. */
 export interface CardSet {
   game: GameId;
-  /** Catalog id: `sv1` (pokemontcg.io), `dex:sv01` (TCGdex fallback), the set name (Yu-Gi-Oh!). */
+  /** Catalog id: `sv1` (pokemontcg.io), `dex:sv01` (TCGdex fallback), the set name (Yu-Gi-Oh!), the set code (Magic, Lorcana). */
   id: string;
   name: string;
   /** Short code shown next to the name: `SVI`, `LOB`. */

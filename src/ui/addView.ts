@@ -12,13 +12,15 @@ export interface AddView extends View {
 const PLACEHOLDER: Record<GameId, string> = {
   pokemon: 'Name or number: “Charizard”, “4/102”, “pikachu 25/198”',
   yugioh: 'Name, set code or passcode: “Dark Magician”, “LOB-EN005”',
+  mtg: 'Name, or set + number: “Lightning Bolt”, “M21 123”',
+  lorcana: 'Name or number: “Elsa Spirit of Winter”, “207/204”',
 };
 
 export function addView(): AddView {
   let game: GameId = settings().game;
   const results = h('div', { class: 'card-list' });
   const input = h('input', { type: 'search', enterkeyhint: 'search', autocomplete: 'off' });
-  const gameSwitch = h('div', { class: 'segmented' });
+  const gameSwitch = h('div', { class: 'segmented scroll' });
   let seq = 0;
 
   const renderSwitch = (): void => {

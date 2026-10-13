@@ -13,7 +13,7 @@ export interface Region {
   h: number;
 }
 
-/** Pokémon cards are 63×88 mm, Yu-Gi-Oh! 59×86 mm. Both close enough to share a frame. */
+/** Pokémon, Magic and Lorcana cards are 63×88 mm, Yu-Gi-Oh! 59×86 mm. Close enough to share a frame. */
 export const CARD_ASPECT = 63 / 88;
 
 export const REGIONS: Record<GameId, Region[]> = {
@@ -31,6 +31,18 @@ export const REGIONS: Record<GameId, Region[]> = {
     { key: 'middle', x: 0.0, y: 0.69, w: 1.0, h: 0.095 },
     // Passcode bottom-left, and the set code on Pendulum cards.
     { key: 'bottom', x: 0.0, y: 0.86, w: 1.0, h: 0.135 },
+  ],
+  mtg: [
+    // Name top-left, stopping before the mana cost.
+    { key: 'name', x: 0.04, y: 0.025, w: 0.72, h: 0.075 },
+    // Collector number, rarity, set code and language, bottom-left: "0123 R / M21 • EN".
+    { key: 'bottom', x: 0.0, y: 0.88, w: 1.0, h: 0.12 },
+  ],
+  lorcana: [
+    // Name and version sit in the banner across the middle of the card.
+    { key: 'name', x: 0.03, y: 0.5, w: 0.94, h: 0.16 },
+    // "12/204 • EN • 1": collector number / set size, language, set number.
+    { key: 'bottom', x: 0.0, y: 0.9, w: 1.0, h: 0.1 },
   ],
 };
 
@@ -154,8 +166,58 @@ export function parseYugioh(raw: Record<string, string>): ScanHints {
   return hints;
 }
 
+const LANG = '(EN|DE|FR|IT|ES|SP|PT|JA|JP|KO|KR|RU|ZH|ZHS|ZHT|CS|CT|PH)';
+const LANG_FIXES: Record<string, string> = { JA: 'JP', KO: 'KR', SP: 'ES', ZHS: 'ZH', ZHT: 'ZH', CS: 'ZH', CT: 'ZH' };
+
+export function parseMtg(raw: Record<string, string>): ScanHints {
+  const hints: ScanHints = { game: 'mtg', raw };
+  const bottom = raw.bottom ?? '';
+
+  // 2015–2019 frames: "123/269 R". Modern frames: "0123 R" on one line, "M21 • EN" under it.
+  const withTotal = new RegExp(`(?<![0-9A-Za-z])(${DIGITISH}{1,4})\\s*/\\s*(${DIGITISH}{2,4})(?![0-9])`).exec(bottom);
+  const bare = new RegExp(`(?<![0-9A-Za-z])(${DIGITISH}{3,4})\\s+[CURMSLTP]\\b`).exec(bottom);
+  const n = withTotal ?? bare;
+  if (n) {
+    const digits = toDigits(n[1]!);
+    if (/^\d+$/.test(digits)) hints.number = String(Number(digits));
+    if (withTotal) hints.total = toDigits(withTotal[2]!);
+  }
+  const set = new RegExp(`\\b([A-Z0-9]{3,5})\\s*[•·*.+\\-]?\\s*${LANG}\\b`).exec(bottom);
+  if (set && /[A-Z]/.test(set[1]!)) {
+    hints.setCode = set[1];
+    hints.language = LANG_FIXES[set[2]!] ?? set[2];
+  }
+
+  hints.nameText = raw.name ?? '';
+  hints.name = guessName(hints.nameText, new Set());
+  return hints;
+}
+
+export function parseLorcana(raw: Record<string, string>): ScanHints {
+  const hints: ScanHints = { game: 'lorcana', raw };
+  const bottom = raw.bottom ?? '';
+  const m = new RegExp(`(?<![0-9])(${DIGITISH}{1,3}[a-z]?)\\s*/\\s*(${DIGITISH}{1,3})(?:\\s*[•·*.\\-]?\\s*${LANG}(?:\\s*[•·*.\\-]?\\s*([A-Z0-9]{1,3}))?)?`).exec(bottom);
+  if (m) {
+    hints.number = String(Number(toDigits(m[1]!.replace(/[a-z]$/, '')))) + (/[a-z]$/.test(m[1]!) ? m[1]!.slice(-1) : '');
+    hints.total = toDigits(m[2]!);
+    if (m[3]) hints.language = LANG_FIXES[m[3]] ?? m[3];
+    if (m[4]) hints.setCode = /^[0-9OoIl]+$/.test(m[4]) ? toDigits(m[4]) : m[4];
+  }
+
+  // The banner has the character name in capitals over the version ("MICKEY MOUSE" /
+  // "Brave Little Tailor"). Keep both lines; matching uses the whole text.
+  const lines = (raw.name ?? '')
+    .split('\n')
+    .map((l) => l.replace(/[^A-Za-z0-9'.,!&\- ]+/g, ' ').replace(/\s+/g, ' ').trim())
+    .filter((l) => (l.match(/[A-Za-z]/g) ?? []).length >= 3);
+  hints.nameText = lines.join(' ');
+  hints.name = lines[0] && lines[0].length >= 3 ? lines.slice(0, 2).join(' - ') : undefined;
+  return hints;
+}
+
 export function parseScan(game: GameId, raw: Record<string, string>): ScanHints {
-  return game === 'pokemon' ? parsePokemon(raw) : parseYugioh(raw);
+  const parsers: Record<GameId, (raw: Record<string, string>) => ScanHints> = { pokemon: parsePokemon, yugioh: parseYugioh, mtg: parseMtg, lorcana: parseLorcana };
+  return parsers[game](raw);
 }
 
 /** Keep the alphabetic words of the top line that aren't stage/HP/attribute noise. */

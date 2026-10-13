@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parsePokemon, parseYugioh } from './parse';
+import { parseLorcana, parseMtg, parsePokemon, parseYugioh } from './parse';
 import { partialSimilarity, sameCollectorNumber, stripLeadingZeros } from '../util/text';
 
 describe('parsePokemon', () => {
@@ -93,5 +93,31 @@ describe('text helpers', () => {
     expect(sameCollectorNumber('025', '25')).toBe(true);
     expect(sameCollectorNumber('TG05', 'TG5')).toBe(true);
     expect(sameCollectorNumber('25', '125')).toBe(false);
+  });
+});
+
+describe('parseMtg', () => {
+  it('reads a modern collector line', () => {
+    const h = parseMtg({ name: 'Lightning Bolt', bottom: '0125 C\nM21 • EN  Christopher Moeller' });
+    expect(h).toMatchObject({ number: '125', setCode: 'M21', language: 'EN', name: 'Lightning Bolt' });
+  });
+
+  it('reads a 2015–2019 number with total', () => {
+    expect(parseMtg({ bottom: '123/269 R\nDOM • EN' })).toMatchObject({ number: '123', total: '269', setCode: 'DOM' });
+  });
+
+  it('fixes OCR digit confusions', () => {
+    expect(parseMtg({ bottom: 'O2S U\nNEO * JA' })).toMatchObject({ number: '25', setCode: 'NEO', language: 'JP' });
+  });
+});
+
+describe('parseLorcana', () => {
+  it('reads number, language and set', () => {
+    const h = parseLorcana({ name: 'MICKEY MOUSE\nBrave Little Tailor', bottom: 'Illus. Someone\n115/204 • EN • 1' });
+    expect(h).toMatchObject({ number: '115', total: '204', language: 'EN', setCode: '1', name: 'MICKEY MOUSE - Brave Little Tailor' });
+  });
+
+  it('keeps enchanted numbers above the set size', () => {
+    expect(parseLorcana({ bottom: '2O7/2O4 · EN · 2' })).toMatchObject({ number: '207', total: '204', setCode: '2' });
   });
 });

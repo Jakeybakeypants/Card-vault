@@ -53,7 +53,7 @@ export function binderView(): View {
 
   const listEl = h('div', { class: 'binder-list' });
   const setEl = h('div', { class: 'binder-set' });
-  const gameSwitch = h('div', { class: 'segmented' });
+  const gameSwitch = h('div', { class: 'segmented scroll' });
   const search = h('input', {
     type: 'search',
     placeholder: 'Find a set…',
@@ -147,7 +147,7 @@ export function binderView(): View {
     const done = s.total > 0 && have >= s.total;
     return h(
       'button',
-      { type: 'button', class: `set-row${done ? ' done' : ''}`, onclick: () => void openSet(s) },
+      { type: 'button', class: `set-row game-${s.game}${done ? ' done' : ''}`, onclick: () => void openSet(s) },
       h('div', { class: 'set-logo' }, s.logo && h('img', { src: s.logo, alt: '', loading: 'lazy', decoding: 'async', onerror: (e: Event) => (e.target as HTMLElement).remove() })),
       h(
         'div',
@@ -156,7 +156,7 @@ export function binderView(): View {
         h('div', { class: 'set-meta' }, [s.code, s.releaseDate?.slice(0, 4), s.series].filter(Boolean).join(' · ')),
         progressBar(pct, done),
       ),
-      h('div', { class: 'set-count' }, h('b', null, have), h('span', null, `/${s.total}`)),
+      h('div', { class: 'set-count' }, h('b', null, have), s.total > 0 && h('span', null, `/${s.total}`)),
     );
   }
 
@@ -205,7 +205,7 @@ export function binderView(): View {
       const pct = total ? Math.min(100, (have / total) * 100) : 0;
       return h(
         'div',
-        { class: `set-hero${done ? ' done' : ''}` },
+        { class: `set-hero game-${s.game}${done ? ' done' : ''}` },
         s.logo && h('img', { class: 'set-hero-logo', src: s.logo, alt: '', onerror: (e: Event) => (e.target as HTMLElement).remove() }),
         h('h2', null, s.name),
         h('div', { class: 'set-meta' }, [s.code, s.releaseDate, s.series].filter(Boolean).join(' · ')),

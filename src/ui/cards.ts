@@ -1,12 +1,12 @@
 import { ALL_VARIANTS } from '../games';
 import { addCard, deleteEntry, entryValue, imageUrl, unitPrice, updateEntry } from '../db/store';
 import type { Recognition } from '../scan/recognize';
-import { CONDITION_LABELS, CONDITIONS, type CardPrinting, type CollectionEntry, type Condition, type ScanHints } from '../types';
+import { CONDITION_LABELS, CONDITIONS, type CardPrinting, type CollectionEntry, type Condition, type GameId, type ScanHints } from '../types';
 import { settings } from '../util/settings';
 import { clear, h, LANGUAGES, money, select, stepper } from './dom';
 import { openSheet, toast } from './overlay';
 
-export const GAME_LABEL = { pokemon: 'Pokémon', yugioh: 'Yu-Gi-Oh!' } as const;
+export const GAME_LABEL: Record<GameId, string> = { pokemon: 'Pokémon', yugioh: 'Yu-Gi-Oh!', mtg: 'Magic', lorcana: 'Lorcana' };
 
 export function cardImg(card: CardPrinting, large = false): HTMLImageElement {
   const img = h('img', { class: 'card-img', alt: card.name, loading: 'lazy', decoding: 'async' });
@@ -192,7 +192,7 @@ export function openEntrySheet(entry: CollectionEntry): void {
           cardMeta(card),
           valueEl,
           details(card),
-          card.url && h('a', { href: card.url, target: '_blank', rel: 'noopener', class: 'ext' }, card.source === 'ygoprodeck' ? 'View on YGOPRODeck ↗' : 'View on TCGplayer ↗'),
+          card.url && h('a', { href: card.url, target: '_blank', rel: 'noopener', class: 'ext' }, card.source === 'ygoprodeck' ? 'View on YGOPRODeck ↗' : card.url.includes('scryfall.com') ? 'View on Scryfall ↗' : 'View on TCGplayer ↗'),
         ),
       ),
       h(

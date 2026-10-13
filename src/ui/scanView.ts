@@ -26,7 +26,7 @@ export function scanView(nav: { search: (q: string, game: GameId) => void }): Vi
   let torchOn = false;
   const torch = h('button', { type: 'button', class: 'round-btn', 'aria-label': 'Torch', title: 'Torch', hidden: true }, '🔦');
 
-  const gameSwitch = h('div', { class: 'segmented', role: 'tablist' });
+  const gameSwitch = h('div', { class: 'segmented scroll', role: 'tablist' });
   const aiBadge = h('span', { class: 'ai-badge', title: 'Cards are read by Claude' }, 'AI scan');
   const renderTop = (): void => {
     const s = settings();

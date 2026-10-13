@@ -11,18 +11,20 @@ const MODEL = 'claude-opus-5-5';
 const SCHEMA = {
   type: 'object',
   properties: {
-    game: { type: 'string', enum: ['pokemon', 'yugioh', 'other'] },
+    game: { type: 'string', enum: ['pokemon', 'yugioh', 'mtg', 'lorcana', 'other'], description: 'mtg = Magic: The Gathering, lorcana = Disney Lorcana.' },
     name: { type: 'string', description: 'Card name exactly as printed, in English if the card is English.' },
     collector_number: {
       type: 'string',
-      description: 'Pokémon: the number before the slash, e.g. "025", "TG05", or a promo number like "SWSH050". Empty for Yu-Gi-Oh!.',
+      description:
+        'Pokémon: the number before the slash, e.g. "025", "TG05", or a promo number like "SWSH050". Magic: the collector number bottom-left, e.g. "0123" or "45". Lorcana: the number before the slash bottom-left, e.g. "12". Empty for Yu-Gi-Oh!.',
     },
-    set_total: { type: 'string', description: 'Pokémon: the number after the slash, e.g. "198". Empty if none.' },
+    set_total: { type: 'string', description: 'Pokémon / Lorcana / older Magic: the number after the slash, e.g. "198". Empty if none.' },
     set_code: {
       type: 'string',
-      description: 'Pokémon: the 2-4 letter set code beside the number, e.g. "PAL". Yu-Gi-Oh!: the full code under the artwork, e.g. "LOB-EN005".',
+      description:
+        'Pokémon: the 2-4 letter set code beside the number, e.g. "PAL". Yu-Gi-Oh!: the full code under the artwork, e.g. "LOB-EN005". Magic: the 3-5 character set code bottom-left, e.g. "M21". Lorcana: the set number after the language, e.g. "1" in "12/204 • EN • 1".',
     },
-    passcode: { type: 'string', description: 'Yu-Gi-Oh!: the 8-digit number bottom-left. Empty for Pokémon.' },
+    passcode: { type: 'string', description: 'Yu-Gi-Oh!: the 8-digit number bottom-left. Empty for other games.' },
     variant: {
       type: 'string',
       description: 'Visible finish or edition: "1st Edition", "Limited Edition", "Holofoil", "Reverse Holofoil", or "" if it cannot be told.',
@@ -83,7 +85,7 @@ export async function readCardWithClaude(canvas: HTMLCanvasElement, apiKey: stri
   const text = res.content.find((b) => b.type === 'text');
   if (!text || text.type !== 'text') throw new Error('Claude returned no reading.');
   const card = JSON.parse(text.text) as AiCard;
-  if (card.game === 'other') throw new Error("That doesn't look like a Pokémon or Yu-Gi-Oh! card.");
+  if (card.game === 'other') throw new Error("That doesn't look like a Pokémon, Yu-Gi-Oh!, Magic or Lorcana card.");
 
   const blank = (s: string): string | undefined => s.trim() || undefined;
   const hints: ScanHints = {
@@ -94,10 +96,14 @@ export async function readCardWithClaude(canvas: HTMLCanvasElement, apiKey: stri
     language: blank(card.language)?.toUpperCase(),
     raw: { claude: text.text },
   };
-  if (card.game === 'pokemon') {
+  if (card.game === 'pokemon' || card.game === 'lorcana') {
     hints.number = blank(card.collector_number);
     hints.total = blank(card.set_total);
     hints.setCode = blank(card.set_code);
+  } else if (card.game === 'mtg') {
+    hints.number = blank(card.collector_number)?.replace(/^0+(?=\d)/, '');
+    hints.total = blank(card.set_total);
+    hints.setCode = blank(card.set_code)?.toUpperCase();
   } else {
     hints.setCode = blank(card.set_code)?.toUpperCase();
     hints.passcode = /^\d{8}$/.test(card.passcode) ? card.passcode : undefined;

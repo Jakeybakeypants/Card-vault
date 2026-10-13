@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { isConfident } from './game';
 import { clearHttpCache } from './http';
+import { lorcana } from './lorcana';
+import { mtg } from './mtg';
 import { pokemon } from './pokemon';
 import { yugioh } from './yugioh';
 
@@ -144,5 +146,62 @@ describe('yugioh.identify', () => {
     const res = await yugioh.identify({ passcode: '46986414' });
     expect(res).toHaveLength(2);
     expect(isConfident(res)).toBe(false);
+  });
+});
+
+describe('mtg', () => {
+  const bolt = (set: string, number: string) => ({
+    id: `${set}-${number}`, name: 'Lightning Bolt', set, set_name: `Set ${set}`, collector_number: number, rarity: 'common', released_at: '2020-07-03',
+    type_line: 'Instant', mana_cost: '{R}', finishes: ['nonfoil', 'foil'], prices: { usd: '1.50', usd_foil: '4.00', usd_etched: null },
+    image_uris: { small: 's', normal: 'n', large: 'l' },
+  });
+
+  it('resolves set code + collector number to one printing', async () => {
+    stubFetch([
+      [/cards\/m21\/125/, bolt('m21', '125')],
+      [/cards\/named/, bolt('m21', '125')],
+      [/cards\/search/, { data: [bolt('m21', '125'), bolt('2xm', '117')] }],
+    ]);
+    const res = await mtg.identify({ setCode: 'M21', number: '125', name: 'Lightning Bolt', nameText: 'Lightning Bolt' });
+    expect(res[0]!.card).toMatchObject({ key: 'm21-125', setCode: 'M21', number: '125', prices: { Normal: 1.5, Foil: 4 }, variants: ['Normal', 'Foil'] });
+    expect(isConfident(res)).toBe(true);
+  });
+
+  it('pages through a set', async () => {
+    stubFetch([
+      [/page=2/, { data: [bolt('m21', '2')], has_more: false }],
+      [/e:m21/, { data: [bolt('m21', '1')], has_more: true, next_page: 'https://api.scryfall.com/cards/search?q=e:m21&page=2' }],
+    ]);
+    const cards = await mtg.setCards({ game: 'mtg', id: 'm21', name: 'Core Set 2021', code: 'M21', total: 2 });
+    expect(cards.map((c) => c.number)).toEqual(['1', '2']);
+  });
+
+  it('skips digital and token sets', async () => {
+    stubFetch([[/\/sets/, { data: [
+      { code: 'm21', name: 'Core Set 2021', set_type: 'core', released_at: '2020-07-03', card_count: 397, digital: false },
+      { code: 'tm21', name: 'M21 Tokens', set_type: 'token', released_at: '2020-07-03', card_count: 14, digital: false },
+      { code: 'ha1', name: 'Historic Anthology 1', set_type: 'expansion', released_at: '2019-11-21', card_count: 20, digital: true },
+    ] }]]);
+    expect((await mtg.sets()).map((s) => s.code)).toEqual(['M21']);
+  });
+});
+
+describe('lorcana', () => {
+  const lc = (set: string, n: string, name: string, version: string) => ({
+    id: `${set}-${n}`, name, version, collector_number: n, rarity: 'Super_rare', set: { id: `set_${set}`, code: set, name: `Set ${set}` },
+    image_uris: { digital: { small: 's', normal: 'n', large: 'l' } }, prices: { usd: '2.00', usd_foil: '6.00' },
+  });
+
+  it('matches a scan against the whole catalog and counts set sizes', async () => {
+    stubFetch([
+      [/v0\/sets\/1\/cards/, [lc('1', '115', 'Mickey Mouse', 'Brave Little Tailor'), lc('1', '12', 'Elsa', 'Snow Queen')]],
+      [/v0\/sets\/2\/cards/, [lc('2', '115', 'Stitch', 'Rock Star')]],
+      [/v0\/sets$/, { results: [{ id: 'set_1', name: 'The First Chapter', code: '1', released_at: '2023-08-18' }, { id: 'set_2', name: 'Rise of the Floodborn', code: '2', released_at: '2023-11-17' }] }],
+    ]);
+    const res = await lorcana.identify({ number: '115', setCode: '1', name: 'MICKEY MOUSE - Brave Little Tailor', nameText: 'MICKEY MOUSE Brave Little Tailor' });
+    expect(res[0]!.card).toMatchObject({ key: '1-115', name: 'Mickey Mouse - Brave Little Tailor', rarity: 'Super rare', prices: { Normal: 2, Foil: 6 } });
+    expect(isConfident(res)).toBe(true);
+    expect((await lorcana.sets()).map((s) => [s.code, s.total])).toEqual([['2', 1], ['1', 2]]);
+    expect((await lorcana.search('elsa')).map((c) => c.key)).toEqual(['1-12']);
   });
 });

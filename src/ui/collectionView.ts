@@ -1,6 +1,7 @@
 import { exportCsv, exportJson, importJson } from '../db/exchange';
 import { entryValue, listEntries, onCollectionChange } from '../db/store';
 import type { CollectionEntry, GameId } from '../types';
+import { GAME_LIST } from '../games';
 import { cardImg, GAME_LABEL, openEntrySheet } from './cards';
 import { clear, h, money, select } from './dom';
 import { toast } from './overlay';
@@ -16,7 +17,7 @@ export function collectionView(onCount: (n: number) => void): View {
   let query = '';
 
   const stats = h('div', { class: 'stats' });
-  const chips = h('div', { class: 'segmented small' });
+  const chips = h('div', { class: 'segmented small scroll' });
   const grid = h('div', { class: 'grid' });
   const search = h('input', {
     type: 'search',
@@ -71,7 +72,7 @@ export function collectionView(onCount: (n: number) => void): View {
     );
     clear(
       chips,
-      (['all', 'pokemon', 'yugioh'] as Filter[]).map((f) =>
+      (['all', ...GAME_LIST.map((g) => g.id)] as Filter[]).map((f) =>
         h(
           'button',
           {

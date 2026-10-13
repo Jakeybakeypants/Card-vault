@@ -1,3 +1,4 @@
+import { GAME_LABEL } from '../ui/cards';
 import type { CollectionEntry } from '../types';
 import { CONDITIONS } from '../types';
 import { entryValue, listEntries, putEntry } from './store';
@@ -30,7 +31,7 @@ export async function exportCsv(): Promise<void> {
   const entries = await listEntries();
   const header = ['Game', 'Name', 'Set', 'Set Code', 'Number', 'Rarity', 'Variant', 'Condition', 'Language', 'Quantity', 'Est. Value (USD)', 'Card ID', 'Source', 'Added', 'Notes'];
   const rows = entries.map((e) => [
-    e.card.game === 'pokemon' ? 'Pokémon' : 'Yu-Gi-Oh!',
+    GAME_LABEL[e.card.game],
     e.card.name,
     e.card.setName,
     e.card.setCode,
@@ -58,7 +59,7 @@ function isEntry(x: unknown): x is CollectionEntry {
     typeof e.quantity === 'number' &&
     !!e.card &&
     typeof e.card.key === 'string' &&
-    (e.card.game === 'pokemon' || e.card.game === 'yugioh') &&
+    e.card.game in GAME_LABEL &&
     CONDITIONS.includes(e.condition)
   );
 }
