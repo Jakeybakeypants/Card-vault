@@ -170,6 +170,14 @@ nav.tabs button.on { color: var(--accent); }
 .stat { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; }
 .stat b { display: block; font-size: 20px; font-variant-numeric: tabular-nums; }
 .stat span { color: var(--muted); font-size: 12px; }
+.price-line { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: -4px 0 14px; font-size: 13px; }
+.price-line .refresh { padding: 6px 12px; font-size: 13px; color: var(--accent); white-space: nowrap; }
+.price-line .refresh:disabled { opacity: 0.6; cursor: default; }
+.refresh-icon { display: inline-block; }
+.refresh.spinning .refresh-icon { animation: spin 0.9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.toast .up { color: var(--ok); }
+.toast .down { color: var(--danger); }
 .toolbar { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
 .toolbar-row { display: grid; grid-template-columns: 1fr 120px; gap: 8px; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 14px 10px; }

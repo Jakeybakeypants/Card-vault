@@ -205,3 +205,33 @@ describe('lorcana', () => {
     expect((await lorcana.search('elsa')).map((c) => c.key)).toEqual(['1-12']);
   });
 });
+
+describe('price refresh', () => {
+  it('pokemon batches ids into one query and skips TCGdex cards', async () => {
+    const seen = stubFetch([[/id:"sv1-63"/, { data: [{ ...ptcgCard('sv1-63', 'Pikachu', '63', 'sv1', 198), tcgplayer: { url: 'x', prices: { normal: { market: 0.4, mid: 0.5 } } } }] }]]);
+    const res = await pokemon.refresh([
+      { game: 'pokemon', key: 'sv1-63', name: 'Pikachu', setName: 'S', setCode: 'SVI', number: '63/198', variants: [], details: {}, source: 'pokemontcg.io' },
+      { game: 'pokemon', key: 'sv01-063', name: 'Pikachu', setName: 'S', setCode: 'sv01', number: '063/198', variants: [], details: {}, source: 'tcgdex' },
+    ]);
+    expect(seen).toHaveLength(1);
+    expect(res.get('sv1-63')?.prices).toEqual({ Normal: 0.4 });
+  });
+
+  it('yugioh refreshes by passcode and returns each printing', async () => {
+    const seen = stubFetch([[/cardinfo\.php\?id=46986414/, { data: [{ id: 46986414, name: 'Dark Magician', type: 'Normal Monster', frameType: 'normal', desc: '', race: 'Spellcaster',
+      card_sets: [{ set_name: 'LOB', set_code: 'LOB-EN005', set_rarity: 'Ultra Rare', set_price: '50.00' }], card_images: [{ id: 1, image_url: 'a', image_url_small: 'b' }] }] }]]);
+    const res = await yugioh.refresh([{ game: 'yugioh', key: 'LOB-EN005:Ultra Rare', name: 'Dark Magician', setName: 'LOB', setCode: 'LOB', number: 'LOB-EN005', variants: [], details: { Passcode: '46986414' }, source: 'ygoprodeck' }]);
+    expect(seen.some((u) => u.includes('id=46986414'))).toBe(true);
+    expect(res.get('LOB-EN005:Ultra Rare')?.prices).toEqual({ default: 50 });
+  });
+
+  it('bypasses the session cache', async () => {
+    let price = '1.00';
+    vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => {} });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ id: 'x', name: 'Bolt', set: 'm21', set_name: 'M21', collector_number: '125', rarity: 'common', prices: { usd: price } }), { status: 200 })));
+    const card = { game: 'mtg' as const, key: 'm21-125', name: 'Bolt', setName: 'M21', setCode: 'M21', number: '125', variants: [], details: {}, source: 'scryfall' };
+    expect((await mtg.refresh([card])).get('m21-125')?.prices).toEqual({ Normal: 1 });
+    price = '2.00';
+    expect((await mtg.refresh([card])).get('m21-125')?.prices).toEqual({ Normal: 2 });
+  });
+});

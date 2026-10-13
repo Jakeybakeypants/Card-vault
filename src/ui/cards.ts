@@ -209,7 +209,11 @@ export function openEntrySheet(entry: CollectionEntry): void {
         'Notes',
         h('textarea', { rows: 2, placeholder: 'Graded, signed, in binder 3…', onchange: (e: Event) => void save({ notes: (e.target as HTMLTextAreaElement).value || undefined }) }, entry.notes ?? ''),
       ),
-      h('p', { class: 'muted small' }, `Added ${new Date(entry.addedAt).toLocaleDateString()} · data from ${card.source}`),
+      h(
+        'p',
+        { class: 'muted small' },
+        `Added ${new Date(entry.addedAt).toLocaleDateString()} · price as of ${new Date(card.pricedAt ?? entry.addedAt).toLocaleDateString()} · data from ${card.source}`,
+      ),
       h(
         'button',
         {

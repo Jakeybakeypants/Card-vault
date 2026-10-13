@@ -2,7 +2,7 @@ import { parseMtg, REGIONS } from '../scan/parse';
 import type { Candidate, CardPrinting, CardSet, ScanHints } from '../types';
 import { normalize, partialSimilarity, sameCollectorNumber } from '../util/text';
 import { rank, weightedScore, type Game } from './game';
-import { getJson, getJsonOrNull, qs } from './http';
+import { getJson, getJsonOrNull, pool, qs } from './http';
 
 // Scryfall: free and keyless (please keep it under ~10 requests/second). https://scryfall.com/docs/api
 const API = 'https://api.scryfall.com';
@@ -99,8 +99,8 @@ export function fromScryfall(c: SfCard): CardPrinting {
   };
 }
 
-async function bySetNumber(set: string, number: string): Promise<CardPrinting[]> {
-  const c = await getJsonOrNull<SfCard>(`${API}/cards/${encodeURIComponent(set.toLowerCase())}/${encodeURIComponent(number)}`);
+async function bySetNumber(set: string, number: string, fresh = false): Promise<CardPrinting[]> {
+  const c = await getJsonOrNull<SfCard>(`${API}/cards/${encodeURIComponent(set.toLowerCase())}/${encodeURIComponent(number)}`, { fresh });
   return c ? [fromScryfall(c)] : [];
 }
 
@@ -182,5 +182,15 @@ export const mtg: Game = {
       url = res.has_more ? res.next_page : undefined;
     }
     return out.map(fromScryfall);
+  },
+
+  async refresh(cards) {
+    // One request per card, four at a time, well inside Scryfall's 10/second.
+    const out = new Map<string, CardPrinting>();
+    await pool(cards, 4, async (c) => {
+      const [hit] = await bySetNumber(c.setCode, c.number, true).catch(() => []);
+      if (hit) out.set(hit.key, hit);
+    });
+    return out;
   },
 };

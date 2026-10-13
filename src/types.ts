@@ -16,6 +16,8 @@ export interface CardPrinting {
   imageLarge?: string;
   /** Market price in USD per variant label (`Holofoil`, `1st Edition`…). */
   prices?: Record<string, number>;
+  /** When `prices` was last fetched (ISO). Missing on cards added before price refreshes existed. */
+  pricedAt?: string;
   /** Variants this printing exists in, best guess first. */
   variants: string[];
   releaseDate?: string;

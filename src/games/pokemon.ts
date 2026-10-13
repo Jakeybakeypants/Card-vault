@@ -3,7 +3,7 @@ import type { Candidate, CardPrinting, CardSet, ScanHints } from '../types';
 import { normalize, partialSimilarity, sameCollectorNumber, stripLeadingZeros } from '../util/text';
 import { settings } from '../util/settings';
 import { rank, weightedScore, type Game } from './game';
-import { getJson, getJsonOrNull, qs } from './http';
+import { chunks, getJson, getJsonOrNull, qs } from './http';
 
 // ---------------------------------------------------------------------------------------------
 // pokemontcg.io v2 (primary): rich data including TCGplayer market prices. Works without a key;
@@ -329,5 +329,17 @@ export const pokemon: Game = {
 
   setCards(set) {
     return set.id.startsWith('dex:') ? dexSetCards(set.id.slice(4)) : ptcgSetCards(set.id);
+  },
+
+  async refresh(cards) {
+    // TCGdex has no prices, so only pokemontcg.io cards can be refreshed. 40 ids per query.
+    const out = new Map<string, CardPrinting>();
+    const ids = cards.filter((c) => c.source === 'pokemontcg.io').map((c) => c.key);
+    for (const chunk of chunks(ids, 40)) {
+      const q = `(${chunk.map((id) => `id:"${id}"`).join(' OR ')})`;
+      const res = await getJson<{ data: PtcgCard[] }>(`${PTCG}?${qs({ q, pageSize: 250, select: SELECT })}`, { headers: ptcgHeaders(), timeoutMs: 30000, fresh: true });
+      for (const c of res.data) out.set(c.id, fromPtcg(c));
+    }
+    return out;
   },
 };

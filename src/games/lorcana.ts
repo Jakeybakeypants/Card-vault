@@ -2,7 +2,7 @@ import { parseLorcana, REGIONS } from '../scan/parse';
 import type { Candidate, CardPrinting, CardSet, ScanHints } from '../types';
 import { normalize, partialSimilarity, sameCollectorNumber } from '../util/text';
 import { rank, weightedScore, type Game } from './game';
-import { getJson } from './http';
+import { getJson, pool } from './http';
 
 // Lorcast: free and keyless. https://lorcast.com/docs/api
 // The whole Lorcana catalog is a few thousand cards, so it's fetched set by set and searched
@@ -78,34 +78,20 @@ export function fromLorcast(c: LcCard): CardPrinting {
   };
 }
 
-async function listSets(): Promise<LcSet[]> {
-  const res = await getJson<{ results: LcSet[] }>(`${API}/sets`);
+async function listSets(fresh = false): Promise<LcSet[]> {
+  const res = await getJson<{ results: LcSet[] }>(`${API}/sets`, { fresh });
   return res.results;
 }
 
-function cardsIn(code: string): Promise<LcCard[]> {
-  return getJson<LcCard[]>(`${API}/sets/${encodeURIComponent(code)}/cards`, { timeoutMs: 30000 });
-}
-
-/** Run jobs a few at a time, to stay polite to the API. */
-async function pool<T, R>(items: T[], size: number, fn: (x: T) => Promise<R>): Promise<R[]> {
-  const out: R[] = new Array(items.length);
-  let next = 0;
-  await Promise.all(
-    Array.from({ length: Math.min(size, items.length) }, async () => {
-      while (next < items.length) {
-        const i = next++;
-        out[i] = await fn(items[i]!);
-      }
-    }),
-  );
-  return out;
+function cardsIn(code: string, fresh = false): Promise<LcCard[]> {
+  return getJson<LcCard[]>(`${API}/sets/${encodeURIComponent(code)}/cards`, { timeoutMs: 30000, fresh });
 }
 
 let catalog: Promise<CardPrinting[]> | null = null;
-function allCards(): Promise<CardPrinting[]> {
-  catalog ??= listSets()
-    .then((sets) => pool(sets, 3, (s) => cardsIn(s.code).catch(() => [] as LcCard[])))
+function allCards(fresh = false): Promise<CardPrinting[]> {
+  if (fresh) catalog = null;
+  catalog ??= listSets(fresh)
+    .then((sets) => pool(sets, 3, (s) => cardsIn(s.code, fresh).catch(() => [] as LcCard[])))
     .then((lists) => lists.flat().map(fromLorcast));
   catalog.catch(() => (catalog = null));
   return catalog;
@@ -167,5 +153,12 @@ export const lorcana: Game = {
 
   async setCards(set) {
     return (await cardsIn(set.id)).map(fromLorcast);
+  },
+
+  async refresh(cards) {
+    // Re-download the (small) catalog and pick the owned cards out of it.
+    const wanted = new Set(cards.map((c) => c.key));
+    const all = await allCards(true);
+    return new Map(all.filter((c) => wanted.has(c.key)).map((c) => [c.key, c]));
   },
 };

@@ -16,6 +16,11 @@ export interface Game {
   sets(): Promise<CardSet[]>;
   /** Every printing in one set. */
   setCards(set: CardSet): Promise<CardPrinting[]>;
+  /**
+   * Today's catalog data for cards already in the collection, keyed by `CardPrinting.key`.
+   * Cards the catalog can't find again are left out.
+   */
+  refresh(cards: CardPrinting[]): Promise<Map<string, CardPrinting>>;
 }
 
 /** Scanned results are trusted enough to add without asking when this returns true. */

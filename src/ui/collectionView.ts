@@ -1,4 +1,5 @@
 import { exportCsv, exportJson, importJson } from '../db/exchange';
+import { onPriceStatus, priceStatus, refreshPrices, type RefreshResult } from '../db/prices';
 import { entryValue, listEntries, onCollectionChange } from '../db/store';
 import type { CollectionEntry, GameId } from '../types';
 import { GAME_LIST } from '../games';
@@ -17,6 +18,28 @@ export function collectionView(onCount: (n: number) => void): View {
   let query = '';
 
   const stats = h('div', { class: 'stats' });
+  const priceLine = h('div', { class: 'price-line' });
+  const renderPriceLine = (): void => {
+    const s = priceStatus();
+    clear(
+      priceLine,
+      h('span', { class: 'muted' }, s.running ? `Updating prices… ${s.done}/${s.total}` : s.lastAt ? `Prices updated ${ago(s.lastAt)}` : 'Prices from when each card was added'),
+      h(
+        'button',
+        {
+          type: 'button',
+          class: `refresh${s.running ? ' spinning' : ''}`,
+          disabled: s.running || !entries.length,
+          onclick: () => void refreshPrices().then((r) => r && priceToast(r, true)),
+        },
+        h('span', { class: 'refresh-icon', 'aria-hidden': 'true' }, '↻'),
+        ' Refresh prices',
+      ),
+    );
+  };
+  onPriceStatus(renderPriceLine);
+  // Keep "updated 5 min ago" honest while the tab sits open.
+  setInterval(() => !priceStatus().running && renderPriceLine(), 60_000);
   const chips = h('div', { class: 'segmented small scroll' });
   const grid = h('div', { class: 'grid' });
   const search = h('input', {
@@ -60,6 +83,7 @@ export function collectionView(onCount: (n: number) => void): View {
   }
 
   function render(): void {
+    renderPriceLine();
     const list = visible();
     const scope = entries.filter((e) => filter === 'all' || e.card.game === filter);
     const copies = scope.reduce((n, e) => n + e.quantity, 0);
@@ -123,6 +147,7 @@ export function collectionView(onCount: (n: number) => void): View {
     'section',
     { class: 'view collection-view' },
     stats,
+    priceLine,
     h('div', { class: 'toolbar' }, chips, h('div', { class: 'toolbar-row' }, search, select<Sort>(sort, [['recent', 'Recent'], ['name', 'Name'], ['set', 'Set'], ['value', 'Value']], (v) => ((sort = v), render()), 'Sort'))),
     grid,
     h(
@@ -135,6 +160,38 @@ export function collectionView(onCount: (n: number) => void): View {
     ),
   );
   return { el, onShow: () => void reload() };
+}
+
+function ago(iso: string): string {
+  const mins = Math.round((Date.now() - Date.parse(iso)) / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins} min ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours} h ago`;
+  const days = Math.round(hours / 24);
+  return days === 1 ? 'yesterday' : `${days} days ago`;
+}
+
+/** "Prices updated · $412.30 (+$8.15)". Automatic refreshes only speak up when the value moved. */
+export function priceToast(r: RefreshResult, manual: boolean): void {
+  const delta = r.after - r.before;
+  const moved = Math.abs(delta) >= 0.01;
+  if (!manual && !moved && !r.failedGames.length) return;
+  if (!r.updated && r.failedGames.length) {
+    toast('Couldn’t reach the price sources. Try again later.', { tone: 'warn' });
+    return;
+  }
+  toast(
+    h(
+      'span',
+      null,
+      h('b', null, 'Prices updated'),
+      ` · ${money(r.after)}`,
+      moved && h('span', { class: delta > 0 ? 'up' : 'down' }, ` (${delta > 0 ? '+' : '−'}${money(Math.abs(delta))})`),
+      r.missed > 0 && h('span', { class: 'muted' }, ` · ${r.missed} not found`),
+    ),
+    { tone: r.failedGames.length ? 'warn' : 'ok', ms: 7000 },
+  );
 }
 
 function stat(value: string, label: string): HTMLElement {

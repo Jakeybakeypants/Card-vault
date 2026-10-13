@@ -2,7 +2,7 @@ import { parseYugioh, REGIONS } from '../scan/parse';
 import type { Candidate, CardPrinting, CardSet, ScanHints } from '../types';
 import { partialSimilarity, similarity } from '../util/text';
 import { rank, weightedScore, type Game } from './game';
-import { getJson, getJsonOrNull, qs } from './http';
+import { chunks, getJson, getJsonOrNull, qs } from './http';
 
 // YGOPRODeck API v7: free and keyless (20 requests/second). https://ygoprodeck.com/api-guide/
 const API = 'https://db.ygoprodeck.com/api/v7';
@@ -196,5 +196,16 @@ export const yugioh: Game = {
   async setCards(set) {
     const res = await getJsonOrNull<{ data: YgoCard[] }>(`${API}/cardinfo.php?${qs({ cardset: set.name })}`, { timeoutMs: 30000 });
     return (res?.data ?? []).flatMap((card) => (card.card_sets ?? []).filter((s) => s.set_name === set.name).map((s) => printing(card, s)));
+  },
+
+  async refresh(cards) {
+    // Look cards up by passcode, 40 per request, and pick each owned printing back out.
+    const out = new Map<string, CardPrinting>();
+    const ids = [...new Set(cards.map((c) => c.details.Passcode).filter((p): p is string => !!p).map((p) => String(Number(p))))];
+    for (const chunk of chunks(ids, 40)) {
+      const res = await getJsonOrNull<{ data: YgoCard[] }>(`${API}/cardinfo.php?${qs({ id: chunk.join(',') })}`, { timeoutMs: 30000, fresh: true });
+      for (const card of res?.data ?? []) for (const p of printings(card)) out.set(p.key, p);
+    }
+    return out;
   },
 };

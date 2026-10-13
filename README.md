@@ -77,7 +77,15 @@ Owning any variant, rarity or condition of a collector number fills that slot.
 | Magic | [Scryfall](https://scryfall.com/docs/api) | USD normal / foil / etched |
 | Lorcana | [Lorcast](https://lorcast.com/docs/api) | USD normal / foil |
 
-All are free and need no key. A free pokemontcg.io key (Settings) raises its rate limit.
+All are free and need no key.
+
+### Prices
+
+Prices are TCGplayer prices in USD, as the catalogs above publish them (they update about
+daily). Each card's price is saved with it, and the app re-fetches today's prices for your whole
+collection **once a day** when you open it; **Refresh prices** on the Collection tab does it on
+demand. The toast shows the new total and how much it moved. A card's detail sheet shows the
+date of its price. If a catalog has no price for a card today, its last known price is kept. A free pokemontcg.io key (Settings) raises its rate limit.
 Card images are cached in the browser when you add a card, so the collection works offline and
 doesn't keep re-downloading images from the catalogs.
 
@@ -103,6 +111,7 @@ Collection tab you can:
 | Scan → candidates | `src/scan/recognize.ts` |
 | Catalogs | `src/games/pokemon.ts`, `yugioh.ts`, `mtg.ts`, `lorcana.ts`, ranking in `src/games/game.ts` |
 | Collection DB, export | `src/db/store.ts`, `src/db/exchange.ts` |
+| Price refresh | `src/db/prices.ts`, each catalog's `refresh()` |
 | Set completion (binder) | `src/db/progress.ts` (pure, unit-tested), `src/ui/binderView.ts` |
 | UI | `src/ui/*` (no framework), `src/style.css` |
 
@@ -115,5 +124,5 @@ entry in `src/games/index.ts`.
 - Auto-capture when the card is steady in the frame (no tap needed).
 - Card-edge detection so photos don't need to be framed carefully.
 - Optional sync between devices (export/import works today).
-- Price history and a "what's my collection worth" chart.
+- Price history and a "what's my collection worth" chart (prices refresh daily; history isn't kept yet).
 - Bulk mode for binders and 9-pocket pages.

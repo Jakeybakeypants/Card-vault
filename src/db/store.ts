@@ -68,6 +68,15 @@ export async function putEntry(entry: CollectionEntry): Promise<void> {
   changed();
 }
 
+/** Write many entries in one transaction, with one change notification. */
+export async function putEntries(entries: CollectionEntry[]): Promise<void> {
+  if (!entries.length) return;
+  await tx('entries', 'readwrite', (s) => {
+    for (const e of entries) s.put(e);
+  });
+  changed();
+}
+
 export async function deleteEntry(id: string): Promise<void> {
   await tx('entries', 'readwrite', (s) => s.delete(id));
   changed();
@@ -87,6 +96,7 @@ export interface AddOptions {
 export async function addCard(card: CardPrinting, opts: AddOptions): Promise<{ entry: CollectionEntry; undo: () => Promise<void> }> {
   const id = entryId(card.game, card.key, opts.variant, opts.condition, opts.language);
   const now = new Date().toISOString();
+  card = { ...card, pricedAt: card.pricedAt ?? now };
   const prev = await getEntry(id);
   const entry: CollectionEntry = prev
     ? { ...prev, card, quantity: prev.quantity + (opts.quantity ?? 1), updatedAt: now }

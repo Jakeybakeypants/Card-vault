@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { CardPrinting, CardSet, CollectionEntry } from '../types';
 import { entryInSet, filledAt, ownedSlots, slotsFor } from './progress';
 
@@ -48,4 +48,13 @@ describe('ownedSlots', () => {
 it('filledAt is the earliest add', () => {
   const c = card({ key: 'sv1-1', number: '1/198' });
   expect(filledAt([entry(c, '2026-03-01T00:00:00Z'), entry(c, '2026-02-01T00:00:00Z')])).toBe('2026-02-01T00:00:00Z');
+});
+
+it('withFreshPrices swaps prices only', async () => {
+  vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => {} });
+  const { withFreshPrices } = await import('./prices');
+  const old = entry(card({ key: 'sv1-1', number: '1/198', prices: { Normal: 1 }, rarity: 'Common' }));
+  const next = withFreshPrices(old, card({ key: 'sv1-1', number: '1/198', prices: { Normal: 3 }, name: 'Renamed' }), '2026-10-13T00:00:00Z');
+  expect(next.card).toMatchObject({ name: 'X', rarity: 'Common', prices: { Normal: 3 }, pricedAt: '2026-10-13T00:00:00Z' });
+  expect(next.quantity).toBe(old.quantity);
 });

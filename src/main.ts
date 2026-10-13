@@ -1,7 +1,8 @@
 import './style.css';
+import { autoRefreshPrices } from './db/prices';
 import { addView } from './ui/addView';
 import { binderView } from './ui/binderView';
-import { collectionView } from './ui/collectionView';
+import { collectionView, priceToast } from './ui/collectionView';
 import { h } from './ui/dom';
 import { closeAllSheets } from './ui/overlay';
 import { scanView } from './ui/scanView';
@@ -69,6 +70,13 @@ function show(tab: Tab): void {
 }
 
 // Release the camera when the app is backgrounded; pick it back up on return.
+// Prices: refresh once a day, on launch or when the app comes back to the foreground.
+const dailyPrices = (): void => void autoRefreshPrices().then((r) => r && priceToast(r, false)).catch((e: unknown) => console.warn('Price refresh failed', e));
+dailyPrices();
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) dailyPrices();
+});
+
 document.addEventListener('visibilitychange', () => {
   if (current !== 'scan') return;
   if (document.hidden) views.scan.onHide?.();
