@@ -1,0 +1,25 @@
+{
+  "name": "card-vault",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Scan trading cards with your phone camera and keep a collection database (Pokémon, Yu-Gi-Oh!)",
+  "scripts": {
+    "dev": "vite",
+    "dev:phone": "vite --mode phone",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.133.0",
+    "tesseract.js": "^7.0.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-basic-ssl": "^2.3.0",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.4",
+    "vitest": "^5.0.4"
+  }
+}

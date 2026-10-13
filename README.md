@@ -1,0 +1,101 @@
+# Card Vault
+
+Scan your trading cards with your phone's camera and they go straight into your collection
+database. Pokémon and Yu-Gi-Oh! are supported. It's a web app: no install, no account, and
+your collection stays on your device.
+
+<p>
+  <img src="docs/scan.png" width="300" alt="Scanning a card">
+  <img src="docs/collection.png" width="300" alt="The collection">
+</p>
+
+## Running it
+
+```bash
+npm install
+npm run dev          # http://localhost:5174 on this computer
+npm run dev:phone    # https://<your-computer's-LAN-IP>:5174 for your phone
+npm test             # parser + catalog unit tests
+npm run build        # static site in dist/, host anywhere (GitHub Pages, Netlify…)
+```
+
+Browsers only open the camera on `https://` pages or `localhost`. `dev:phone` serves HTTPS with
+a self-signed certificate, so the first time you open it on your phone you'll need to accept the
+warning. If the camera isn't available, the scan button falls back to the phone's photo picker,
+which still works over plain HTTP.
+
+## How scanning works
+
+1. Hold the card inside the on-screen frame and tap the shutter (or press **Space** on a computer).
+2. The app reads the strips of the card that identify it:
+   - **Pokémon**: the name line, plus the collector number and set code at the bottom
+     (`SVI EN 063/198`, `4/102`, `TG05/TG30`, `SWSH050`).
+   - **Yu-Gi-Oh!**: the name banner, the set code under the artwork (`LOB-EN005`), the
+     1st Edition/Limited Edition stamp, and the 8-digit passcode.
+3. It looks those up in the card database and ranks the matches.
+4. **One clear match** (number + set + name agree): the card is added immediately, with an
+   **Undo** toast, and the camera stays ready for the next card.
+   **Several possible matches** (for example, only the name was readable): you get a short
+   list with pictures to pick from.
+
+Scanning the same card again increases its quantity. Each copy is tracked by printing,
+variant (Holofoil, Reverse Holofoil, 1st Edition…), condition and language, all editable
+from the Collection tab.
+
+### Two ways to read a card
+
+| | On-device OCR (default) | AI scan (optional) |
+| --- | --- | --- |
+| How | [Tesseract](https://github.com/naptha/tesseract.js) in the browser | The photo is sent to Claude, which reads the card |
+| Cost | Free | About a cent per scan, on your own [Anthropic API key](https://console.anthropic.com/settings/keys) |
+| Privacy | Photo never leaves the phone | Photo goes to api.anthropic.com |
+| Good at | Flat, well-lit, non-holo cards | Holo foil, glare, angled shots, non-English cards; detects the game itself |
+
+Turn AI scan on in **Settings**. The key is stored only in your browser.
+
+## Card data
+
+| Game | Source | Prices |
+| --- | --- | --- |
+| Pokémon | [pokemontcg.io](https://pokemontcg.io) API v2, with [TCGdex](https://tcgdex.dev) as a fallback | TCGplayer market price per variant |
+| Yu-Gi-Oh! | [YGOPRODeck](https://ygoprodeck.com/api-guide/) API v7 | TCGplayer price per printing |
+
+Both are free and need no key. A free pokemontcg.io key (Settings) raises its rate limit.
+Card images are cached in the browser when you add a card, so the collection works offline and
+doesn't keep re-downloading images from the catalogs.
+
+## Your data
+
+The collection is stored in the browser's IndexedDB on the device you scan with. From the
+Collection tab you can:
+
+- **Export CSV**: one row per entry (name, set, number, rarity, variant, condition, language,
+  quantity, value) for spreadsheets.
+- **Back up (JSON)** / **Restore**: a full backup you can move to another device. Restoring
+  merges into what's already there.
+
+## Code map
+
+| Area | Files |
+| --- | --- |
+| Types | `src/types.ts` |
+| OCR regions + text parsing | `src/scan/parse.ts` (pure, unit-tested) |
+| Camera, cropping | `src/scan/camera.ts` |
+| OCR (adaptive threshold → Tesseract) | `src/scan/ocr.ts` |
+| AI reader | `src/scan/ai.ts` |
+| Scan → candidates | `src/scan/recognize.ts` |
+| Catalogs | `src/games/pokemon.ts`, `src/games/yugioh.ts`, ranking in `src/games/game.ts` |
+| Collection DB, export | `src/db/store.ts`, `src/db/exchange.ts` |
+| UI | `src/ui/*` (no framework), `src/style.css` |
+
+Adding another game (Magic, One Piece, Lorcana…) means one new file in `src/games/` that
+implements the `Game` interface (OCR regions, a parser, and catalog lookup/search), plus its
+entry in `src/games/index.ts`.
+
+## Roadmap
+
+- Auto-capture when the card is steady in the frame (no tap needed).
+- Card-edge detection so photos don't need to be framed carefully.
+- Optional sync between devices (export/import works today).
+- Price history and a "what's my collection worth" chart.
+- Bulk mode for binders and 9-pocket pages.
