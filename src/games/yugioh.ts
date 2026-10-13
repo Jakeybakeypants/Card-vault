@@ -1,8 +1,8 @@
 import { parseYugioh, REGIONS } from '../scan/parse';
-import type { Candidate, CardPrinting, ScanHints } from '../types';
+import type { Candidate, CardPrinting, CardSet, ScanHints } from '../types';
 import { partialSimilarity, similarity } from '../util/text';
 import { rank, weightedScore, type Game } from './game';
-import { getJsonOrNull, qs } from './http';
+import { getJson, getJsonOrNull, qs } from './http';
 
 // YGOPRODeck API v7: free and keyless (20 requests/second). https://ygoprodeck.com/api-guide/
 const API = 'https://db.ygoprodeck.com/api/v7';
@@ -40,6 +40,14 @@ interface YgoSetInfo {
   set_code: string;
   set_rarity: string;
   set_price: string;
+}
+
+interface YgoSetListing {
+  set_name: string;
+  set_code: string;
+  num_of_cards: number;
+  tcg_date?: string;
+  set_image?: string;
 }
 
 export const YUGIOH_VARIANTS = ['Unlimited', '1st Edition', 'Limited Edition'];
@@ -165,5 +173,28 @@ export const yugioh: Game = {
       .sort((a, b) => similarity(b.name, q) - similarity(a.name, q))
       .slice(0, 6)
       .flatMap((c) => printings(c));
+  },
+
+  async sets() {
+    const list = await getJson<YgoSetListing[]>(`${API}/cardsets.php`, { timeoutMs: 30000 });
+    return list
+      .filter((s) => s.num_of_cards > 0)
+      .map(
+        (s): CardSet => ({
+          game: 'yugioh',
+          id: s.set_name,
+          name: s.set_name,
+          code: s.set_code,
+          total: s.num_of_cards,
+          releaseDate: s.tcg_date,
+          logo: s.set_image,
+        }),
+      )
+      .sort((a, b) => (b.releaseDate ?? '').localeCompare(a.releaseDate ?? ''));
+  },
+
+  async setCards(set) {
+    const res = await getJsonOrNull<{ data: YgoCard[] }>(`${API}/cardinfo.php?${qs({ cardset: set.name })}`, { timeoutMs: 30000 });
+    return (res?.data ?? []).flatMap((card) => (card.card_sets ?? []).filter((s) => s.set_name === set.name).map((s) => printing(card, s)));
   },
 };

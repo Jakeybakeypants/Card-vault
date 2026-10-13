@@ -70,6 +70,22 @@ describe('pokemon.identify', () => {
   });
 });
 
+describe('pokemon sets', () => {
+  it('lists sets and pages through a big set', async () => {
+    const page = (n: number, from: number) => Array.from({ length: n }, (_, i) => ptcgCard(`sv2-${from + i}`, `Card ${from + i}`, String(from + i), 'sv2', 193));
+    const seen = stubFetch([
+      [/v2\/sets/, { data: [{ id: 'sv2', name: 'Paldea Evolved', series: 'Scarlet & Violet', total: 279, ptcgoCode: 'PAL', releaseDate: '2023/06/09', images: { symbol: 's', logo: 'l' } }] }],
+      [/set\.id:sv2.*page=1/, { data: page(250, 1), totalCount: 279 }],
+      [/set\.id:sv2.*page=2/, { data: page(29, 251), totalCount: 279 }],
+    ]);
+    const [set] = await pokemon.sets();
+    expect(set).toMatchObject({ id: 'sv2', code: 'PAL', total: 279, releaseDate: '2023-06-09' });
+    const cards = await pokemon.setCards(set!);
+    expect(cards).toHaveLength(279);
+    expect(seen.filter((u) => u.includes('set.id:sv2'))).toHaveLength(2);
+  });
+});
+
 describe('yugioh.identify', () => {
   const darkMagician = {
     id: 46986414,
@@ -110,6 +126,17 @@ describe('yugioh.identify', () => {
     const res = await yugioh.identify({ setCode: 'SDY-006' });
     expect(seen.some((u) => u.includes('setcode=SDY-006'))).toBe(true);
     expect(res[0]!.card.number).toBe('SDY-EN006');
+  });
+
+  it('lists the printings of one set', async () => {
+    stubFetch([
+      [/cardsets\.php/, [{ set_name: 'Starter Deck: Yugi', set_code: 'SDY', num_of_cards: 50, tcg_date: '2002-03-29' }, { set_name: 'Legend of Blue Eyes White Dragon', set_code: 'LOB', num_of_cards: 126, tcg_date: '2002-03-08' }]],
+      [/cardset=Legend/, { data: [darkMagician] }],
+    ]);
+    const sets = await yugioh.sets();
+    expect(sets.map((s) => s.code)).toEqual(['SDY', 'LOB']);
+    const cards = await yugioh.setCards(sets[1]!);
+    expect(cards.map((c) => c.key)).toEqual(['LOB-EN005:Ultra Rare']);
   });
 
   it('asks which printing when only the passcode is known', async () => {

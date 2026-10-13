@@ -1,5 +1,5 @@
 import { parsePokemon, REGIONS } from '../scan/parse';
-import type { Candidate, CardPrinting, ScanHints } from '../types';
+import type { Candidate, CardPrinting, CardSet, ScanHints } from '../types';
 import { normalize, partialSimilarity, sameCollectorNumber, stripLeadingZeros } from '../util/text';
 import { settings } from '../util/settings';
 import { rank, weightedScore, type Game } from './game';
@@ -30,6 +30,7 @@ interface PtcgCard {
 }
 
 const PTCG = 'https://api.pokemontcg.io/v2/cards';
+const PTCG_SETS = 'https://api.pokemontcg.io/v2/sets';
 const SELECT = 'id,name,supertype,subtypes,hp,types,number,artist,rarity,set,images,tcgplayer';
 
 /** TCGplayer price keys → the variant labels shown in the app. */
@@ -81,11 +82,51 @@ function defaultVariants(rarity?: string): string[] {
   return /holo|rare|ex|gx|v\b|vmax|vstar/i.test(rarity ?? '') ? ['Holofoil', 'Reverse Holofoil', 'Normal'] : ['Normal', 'Reverse Holofoil', 'Holofoil'];
 }
 
-async function ptcgQuery(q: string, pageSize = 60): Promise<PtcgCard[]> {
+function ptcgHeaders(): Record<string, string> | undefined {
   const key = settings().pokemonTcgApiKey;
+  return key ? { 'X-Api-Key': key } : undefined;
+}
+
+async function ptcgQuery(q: string, pageSize = 60): Promise<PtcgCard[]> {
   const url = `${PTCG}?${qs({ q, pageSize, orderBy: '-set.releaseDate', select: SELECT })}`;
-  const res = await getJson<{ data: PtcgCard[] }>(url, { headers: key ? { 'X-Api-Key': key } : undefined, timeoutMs: 20000 });
+  const res = await getJson<{ data: PtcgCard[] }>(url, { headers: ptcgHeaders(), timeoutMs: 20000 });
   return res.data;
+}
+
+interface PtcgSet {
+  id: string;
+  name: string;
+  series: string;
+  total: number;
+  ptcgoCode?: string;
+  releaseDate: string;
+  images: { symbol: string; logo: string };
+}
+
+async function ptcgSets(): Promise<CardSet[]> {
+  const res = await getJson<{ data: PtcgSet[] }>(`${PTCG_SETS}?${qs({ orderBy: '-releaseDate', pageSize: 250 })}`, { headers: ptcgHeaders(), timeoutMs: 20000 });
+  return res.data.map((s) => ({
+    game: 'pokemon',
+    id: s.id,
+    name: s.name,
+    code: s.ptcgoCode ?? s.id.toUpperCase(),
+    total: s.total,
+    releaseDate: s.releaseDate.replace(/\//g, '-'),
+    series: s.series,
+    logo: s.images.logo,
+  }));
+}
+
+/** All cards in a set, a page (max 250) at a time. */
+async function ptcgSetCards(setId: string): Promise<CardPrinting[]> {
+  const out: PtcgCard[] = [];
+  for (let page = 1; page <= 10; page++) {
+    const url = `${PTCG}?${qs({ q: `set.id:${setId}`, pageSize: 250, page, select: SELECT })}`;
+    const res = await getJson<{ data: PtcgCard[]; totalCount: number }>(url, { headers: ptcgHeaders(), timeoutMs: 30000 });
+    out.push(...res.data);
+    if (!res.data.length || out.length >= res.totalCount) break;
+  }
+  return out.map(fromPtcg);
 }
 
 /** "025" → `(number:25 OR number:025)`, so either padding style in the catalog matches. */
@@ -133,7 +174,38 @@ interface DexCard extends DexCardBrief {
 interface DexSetBrief {
   id: string;
   name: string;
+  logo?: string;
   cardCount: { official: number; total: number };
+}
+
+async function dexSets(): Promise<CardSet[]> {
+  const list = await getJson<DexSetBrief[]>(`${TCGDEX}/sets`);
+  // TCGdex lists oldest first and has no release dates in the listing.
+  return list.reverse().map((s) => ({
+    game: 'pokemon',
+    id: `dex:${s.id}`,
+    name: s.name,
+    code: s.id.toUpperCase(),
+    total: s.cardCount.total,
+    logo: s.logo ? `${s.logo}.webp` : undefined,
+  }));
+}
+
+async function dexSetCards(setId: string): Promise<CardPrinting[]> {
+  const set = await getJson<DexSetBrief & { cards: DexCardBrief[] }>(`${TCGDEX}/sets/${encodeURIComponent(setId)}`);
+  return set.cards.map((c) => ({
+    game: 'pokemon',
+    key: c.id,
+    name: c.name,
+    setName: set.name,
+    setCode: set.id,
+    number: `${c.localId}/${set.cardCount.official}`,
+    image: c.image ? `${c.image}/low.webp` : undefined,
+    imageLarge: c.image ? `${c.image}/high.webp` : undefined,
+    variants: defaultVariants(),
+    details: {},
+    source: 'tcgdex',
+  }));
 }
 
 function fromDex(c: DexCard): CardPrinting {
@@ -244,5 +316,18 @@ export const pokemon: Game = {
       ? { number: m[2]!.toUpperCase(), total: m[3]!.toUpperCase(), name: m[1] || undefined, nameText: m[1] || undefined }
       : { name: q, nameText: q };
     return (await this.identify(hints)).map((c) => c.card);
+  },
+
+  async sets() {
+    try {
+      return await ptcgSets();
+    } catch (e) {
+      console.warn('pokemontcg.io sets failed, using TCGdex', e);
+      return dexSets();
+    }
+  },
+
+  setCards(set) {
+    return set.id.startsWith('dex:') ? dexSetCards(set.id.slice(4)) : ptcgSetCards(set.id);
   },
 };

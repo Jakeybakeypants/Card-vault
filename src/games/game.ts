@@ -1,5 +1,5 @@
 import type { Region } from '../scan/parse';
-import type { Candidate, CardPrinting, GameId, ScanHints } from '../types';
+import type { Candidate, CardPrinting, CardSet, GameId, ScanHints } from '../types';
 
 export interface Game {
   id: GameId;
@@ -12,6 +12,10 @@ export interface Game {
   identify(hints: ScanHints): Promise<Candidate[]>;
   /** Free-text search for manual adds: a name, a collector number or a set code. */
   search(query: string): Promise<CardPrinting[]>;
+  /** Every set in the catalog, newest first. */
+  sets(): Promise<CardSet[]>;
+  /** Every printing in one set. */
+  setCards(set: CardSet): Promise<CardPrinting[]>;
 }
 
 /** Scanned results are trusted enough to add without asking when this returns true. */

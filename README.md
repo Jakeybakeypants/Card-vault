@@ -53,6 +53,17 @@ from the Collection tab.
 
 Turn AI scan on in **Settings**. The key is stored only in your browser.
 
+## Binder: what's left to collect
+
+The **Binder** tab lists every set in the catalog, newest first, with the sets you've started
+at the top and a progress bar for each. Open a set to see every card in it as a binder page:
+cards you own are in full colour, and the ones you're missing are faded with their collector
+number. Tap a faded card to add it. Cards added since you last opened that set flip into colour
+with a glint, so after a scanning session you can see exactly what filled in. **Have** / **Need**
+filters the page; finishing a set turns its bar gold.
+
+Owning any variant, rarity or condition of a collector number fills that slot.
+
 ## Card data
 
 | Game | Source | Prices |
@@ -86,6 +97,7 @@ Collection tab you can:
 | Scan → candidates | `src/scan/recognize.ts` |
 | Catalogs | `src/games/pokemon.ts`, `src/games/yugioh.ts`, ranking in `src/games/game.ts` |
 | Collection DB, export | `src/db/store.ts`, `src/db/exchange.ts` |
+| Set completion (binder) | `src/db/progress.ts` (pure, unit-tested), `src/ui/binderView.ts` |
 | UI | `src/ui/*` (no framework), `src/style.css` |
 
 Adding another game (Magic, One Piece, Lorcana…) means one new file in `src/games/` that

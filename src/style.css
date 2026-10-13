@@ -70,7 +70,7 @@ main { padding: 0 16px calc(var(--tabs-h) + var(--safe-b) + 24px); }
 
 nav.tabs {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 10;
-  display: grid; grid-template-columns: repeat(4, 1fr);
+  display: grid; grid-template-columns: repeat(5, 1fr);
   height: calc(var(--tabs-h) + var(--safe-b));
   padding-bottom: var(--safe-b);
   background: color-mix(in srgb, var(--panel) 94%, transparent);
@@ -183,6 +183,81 @@ nav.tabs button.on { color: var(--accent); }
 .exports { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 28px; }
 .exports button { flex: 1 1 auto; }
 
+/* ---------- binder ---------- */
+
+.binder-view .segmented { margin-bottom: 10px; }
+.binder-view h2 { font-size: 13px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.6px; margin: 22px 0 8px; }
+.set-rows { display: flex; flex-direction: column; gap: 8px; }
+.set-row {
+  display: grid; grid-template-columns: 64px 1fr auto; gap: 12px; align-items: center;
+  text-align: left; padding: 10px 12px; background: var(--panel); border-radius: 12px; min-width: 0;
+}
+.set-logo { height: 36px; display: grid; place-items: center; }
+.set-logo img { max-width: 100%; max-height: 36px; object-fit: contain; }
+.set-text { min-width: 0; }
+.set-name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.set-meta { color: var(--muted); font-size: 12px; margin: 2px 0 7px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.set-count { text-align: right; font-variant-numeric: tabular-nums; }
+.set-count b { font-size: 17px; }
+.set-count span { color: var(--muted); font-size: 13px; }
+.set-row.done { box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent) inset; }
+
+.bar { height: 6px; border-radius: 999px; background: var(--panel-2); overflow: hidden; }
+.bar i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #c99a2e, var(--accent)); transition: width 0.6s cubic-bezier(0.2, 0.9, 0.3, 1); }
+.bar.done i { background: linear-gradient(90deg, var(--accent), #fff3b0, var(--accent)); background-size: 200% 100%; animation: shimmer 2.4s linear infinite; }
+@keyframes shimmer { to { background-position: -200% 0; } }
+
+.back { border: 0; background: none; color: var(--accent); padding: 4px 0; margin-bottom: 6px; }
+.set-hero { text-align: center; padding: 6px 0 14px; }
+.set-hero-logo { max-width: 220px; max-height: 80px; object-fit: contain; display: block; margin: 0 auto 8px; }
+.binder-view .set-hero h2 { margin: 0; font-size: 20px; color: var(--text); text-transform: none; letter-spacing: 0; }
+.set-hero .set-meta { margin-bottom: 10px; }
+.set-hero-count { font-size: 15px; margin-bottom: 8px; color: var(--muted); }
+.set-hero-count b { font-size: 26px; color: var(--text); font-variant-numeric: tabular-nums; }
+.set-hero .bar { height: 10px; }
+.set-hero.done .set-hero-count span { color: var(--accent); font-weight: 600; }
+
+.binder {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 10px 8px;
+  margin-top: 14px; padding: 10px; border-radius: 16px;
+  background: repeating-linear-gradient(0deg, transparent 0 22px, rgba(255, 255, 255, 0.015) 22px 23px), var(--panel);
+  border: 1px solid var(--line);
+}
+.slot { position: relative; padding: 0; border: 0; background: none; border-radius: 4.5% / 3.2%; perspective: 600px; }
+.slot.ghost { aspect-ratio: 63 / 88; background: var(--panel-2); animation: pulse 0.9s ease-in-out infinite alternate; }
+.slot .card-img { transition: filter 0.3s, opacity 0.3s; }
+.slot.missing .card-img { filter: grayscale(1) brightness(0.7); opacity: 0.22; }
+.slot.missing::before {
+  content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+  border: 1.5px dashed color-mix(in srgb, var(--muted) 45%, transparent);
+}
+.slot.owned .card-img { box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5); }
+.slot-num {
+  position: absolute; left: 50%; bottom: 6px; transform: translateX(-50%);
+  font: 600 11px ui-monospace, 'SF Mono', Menlo, monospace; padding: 2px 7px; border-radius: 999px;
+  background: rgba(10, 12, 16, 0.72); color: var(--muted); white-space: nowrap;
+}
+.slot.missing .slot-num { bottom: 50%; transform: translate(-50%, 50%); font-size: 13px; color: var(--text); background: transparent; }
+.slot.owned .slot-num { opacity: 0; }
+.slot .qty { top: 4px; right: 4px; font-size: 11px; padding: 1px 6px; }
+
+/* Newly filled: the card flips into colour, then a glint runs across it. */
+.slot.fresh .card-img { animation: fill-in 0.9s cubic-bezier(0.2, 0.9, 0.3, 1.15) both; animation-delay: var(--d, 0ms); }
+.slot.fresh::after {
+  content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; overflow: hidden;
+  background: linear-gradient(105deg, transparent 35%, rgba(255, 245, 200, 0.75) 50%, transparent 65%) no-repeat;
+  background-size: 250% 100%; background-position: 150% 0; opacity: 0;
+  animation: glint 0.8s ease-out both; animation-delay: calc(var(--d, 0ms) + 0.6s);
+}
+.slot.fresh { animation: glow 1.8s ease-out both; animation-delay: calc(var(--d, 0ms) + 0.4s); }
+@keyframes fill-in {
+  0% { transform: rotateY(90deg) scale(0.85); filter: grayscale(1) brightness(0.7); opacity: 0.25; }
+  55% { transform: rotateY(0) scale(1.07); filter: none; opacity: 1; }
+  100% { transform: none; filter: none; opacity: 1; }
+}
+@keyframes glint { 0% { opacity: 1; background-position: 150% 0; } 100% { opacity: 1; background-position: -60% 0; } }
+@keyframes glow { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 80%, transparent); } 100% { box-shadow: 0 0 0 14px transparent; } }
+
 /* ---------- add / search ---------- */
 
 .add-view { display: flex; flex-direction: column; gap: 10px; }
@@ -264,6 +339,7 @@ nav.tabs button.on { color: var(--accent); }
 
 @media (min-width: 720px) {
   .grid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
+  .binder { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
   .sheet { border-radius: 20px; margin-bottom: 4vh; border-bottom: 1px solid var(--line); }
   .sheet-backdrop { align-items: center; }
 }

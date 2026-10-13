@@ -75,3 +75,18 @@ export interface Candidate {
   /** 0–1: how well this printing matches the scan. */
   score: number;
 }
+
+/** A set / expansion, as listed by a catalog. */
+export interface CardSet {
+  game: GameId;
+  /** Catalog id: `sv1` (pokemontcg.io), `dex:sv01` (TCGdex fallback), the set name (Yu-Gi-Oh!). */
+  id: string;
+  name: string;
+  /** Short code shown next to the name: `SVI`, `LOB`. */
+  code: string;
+  /** Cards in the set, including secret rares. */
+  total: number;
+  releaseDate?: string;
+  series?: string;
+  logo?: string;
+}
