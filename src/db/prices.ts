@@ -1,121 +1,49 @@
 import { GAMES } from '../games';
-import type { CardPrinting, CollectionEntry, GameId } from '../types';
-import { entryValue, listEntries, putEntries } from './store';
+import type { CollectionEntry } from '../types';
+import { listEntries, putEntries } from './store';
+
+const DAY = 24 * 60 * 60 * 1000;
+let running: Promise<number> | null = null;
+
+function stale(e: CollectionEntry, maxAgeMs: number): boolean {
+  const t = e.card.pricesUpdatedAt ? Date.parse(e.card.pricesUpdatedAt) : NaN;
+  return Number.isNaN(t) || Date.now() - t > maxAgeMs;
+}
 
 /**
- * Keeps collection prices current. Prices are saved with each card when it's added; this
- * re-fetches today's prices for everything in the collection, on demand (Refresh prices) and
- * automatically once a day when the app is opened.
+ * Re-fetch prices for saved cards older than `maxAgeMs` (default a day). Each distinct printing
+ * is fetched once, three at a time, and all rows are saved together at the end. Returns how many
+ * cards got new prices. Only one refresh runs at a time.
  */
-
-const LAST_KEY = 'card-vault:prices-refreshed-at';
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-export interface PriceStatus {
-  running: boolean;
-  /** Games done / games to do, for progress. */
-  done: number;
-  total: number;
-  lastAt?: string;
-}
-
-let status: PriceStatus = { running: false, done: 0, total: 0, lastAt: readLast() };
-const listeners = new Set<(s: PriceStatus) => void>();
-
-function readLast(): string | undefined {
-  try {
-    return localStorage.getItem(LAST_KEY) ?? undefined;
-  } catch {
-    return undefined;
-  }
-}
-function set(patch: Partial<PriceStatus>): void {
-  status = { ...status, ...patch };
-  for (const fn of listeners) fn(status);
-}
-
-export function priceStatus(): PriceStatus {
-  return status;
-}
-export function onPriceStatus(fn: (s: PriceStatus) => void): () => void {
-  listeners.add(fn);
-  return () => listeners.delete(fn);
-}
-
-export interface RefreshResult {
-  updated: number;
-  /** Cards no catalog could find again (or whose catalog failed). */
-  missed: number;
-  before: number;
-  after: number;
-  failedGames: GameId[];
-}
-
-/** Today's prices onto an entry's card; everything else about the card is kept. */
-export function withFreshPrices(e: CollectionEntry, fresh: CardPrinting, at: string): CollectionEntry {
-  return { ...e, card: { ...e.card, prices: fresh.prices, pricedAt: at, image: e.card.image ?? fresh.image, url: e.card.url ?? fresh.url } };
-}
-
-export async function refreshPrices(): Promise<RefreshResult | null> {
-  if (status.running) return null;
-  const entries = await listEntries();
-  const byGame = new Map<GameId, Map<string, CardPrinting>>();
-  for (const e of entries) {
-    const cards = byGame.get(e.card.game) ?? new Map<string, CardPrinting>();
-    cards.set(e.card.key, e.card);
-    byGame.set(e.card.game, cards);
-  }
-  set({ running: true, done: 0, total: byGame.size });
-  const at = new Date().toISOString();
-  const fresh = new Map<string, CardPrinting>();
-  const failedGames: GameId[] = [];
-  try {
-    for (const [game, cards] of byGame) {
-      try {
-        for (const [key, card] of await GAMES[game].refresh([...cards.values()])) fresh.set(`${game}|${key}`, card);
-      } catch (e) {
-        console.warn(`Price refresh failed for ${game}`, e);
-        failedGames.push(game);
-      }
-      set({ done: status.done + 1 });
+export function refreshPrices(opts: { maxAgeMs?: number; onProgress?: (done: number, total: number) => void } = {}): Promise<number> {
+  running ??= (async () => {
+    const entries = await listEntries();
+    const byCard = new Map<string, CollectionEntry[]>();
+    for (const e of entries) {
+      if (!stale(e, opts.maxAgeMs ?? DAY)) continue;
+      const k = `${e.card.game}|${e.card.key}`;
+      byCard.set(k, [...(byCard.get(k) ?? []), e]);
     }
-    // Re-read: the collection may have been edited while the catalogs were being asked.
-    const current = await listEntries();
-    const before = current.reduce((n, e) => n + (entryValue(e) ?? 0), 0);
-    const next = current.map((e) => {
-      const f = fresh.get(`${e.card.game}|${e.card.key}`);
-      // No price today (delisted, between sales): keep the last known one.
-      return f?.prices ? withFreshPrices(e, f, at) : e;
-    });
-    const changed = next.filter((e, i) => e !== current[i]);
-    await putEntries(changed);
-    // Only count it as a daily refresh if something actually came back.
-    if (current.length === 0 || changed.length > 0) {
-      try {
-        localStorage.setItem(LAST_KEY, at);
-      } catch {
-        // Storage blocked: it'll just refresh again next launch.
+    const groups = [...byCard.values()];
+    const updated: CollectionEntry[] = [];
+    let done = 0;
+    let next = 0;
+    const worker = async (): Promise<void> => {
+      while (next < groups.length) {
+        const group = groups[next++]!;
+        const card = group[0]!.card;
+        const fresh = await GAMES[card.game].refresh(card).catch(() => null);
+        if (fresh) {
+          // Keep the saved identity; take the new facts and prices.
+          const checked = { ...fresh, key: card.key, partial: undefined, pricesUpdatedAt: fresh.pricesUpdatedAt ?? new Date().toISOString() };
+          for (const e of group) updated.push({ ...e, card: checked });
+        }
+        opts.onProgress?.(++done, groups.length);
       }
-      set({ lastAt: at });
-    }
-    return {
-      updated: changed.length,
-      missed: current.length - changed.length,
-      before,
-      after: next.reduce((n, e) => n + (entryValue(e) ?? 0), 0),
-      failedGames,
     };
-  } finally {
-    set({ running: false });
-  }
-}
-
-/** Refresh in the background if the last refresh is more than a day old. */
-export async function autoRefreshPrices(): Promise<RefreshResult | null> {
-  const last = status.lastAt ? Date.parse(status.lastAt) : 0;
-  if (status.running || Date.now() - last < DAY_MS) return null;
-  if (!navigator.onLine) return null;
-  const entries = await listEntries();
-  if (!entries.length) return null;
-  return refreshPrices();
+    await Promise.all([worker(), worker(), worker()]);
+    await putEntries(updated);
+    return new Set(updated.map((e) => e.card.key)).size;
+  })().finally(() => (running = null));
+  return running;
 }

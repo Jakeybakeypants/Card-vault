@@ -1,6 +1,7 @@
-import { ALL_VARIANTS } from '../games';
+import { ALL_VARIANTS, GAMES } from '../games';
 import { addCard, deleteEntry, entryValue, imageUrl, unitPrice, updateEntry } from '../db/store';
-import type { Recognition } from '../scan/recognize';
+import { guessFinish, type Recognition } from '../scan/recognize';
+import { learnFinish } from '../scan/vision';
 import { CONDITION_LABELS, CONDITIONS, type CardPrinting, type CollectionEntry, type Condition, type GameId, type ScanHints } from '../types';
 import { settings } from '../util/settings';
 import { clear, h, LANGUAGES, money, select, stepper } from './dom';
@@ -32,42 +33,83 @@ export function cardRow(card: CardPrinting, onpick: () => void, badge?: string):
   );
 }
 
-/** Best variant for a scanned card: what the scan saw if the printing has it, else the most likely. */
-export function pickVariant(card: CardPrinting, hint?: string): string {
-  if (hint) {
-    const hit = card.variants.find((v) => v.toLowerCase().startsWith(hint.toLowerCase()));
-    if (hit) return hit;
-  }
-  return card.variants[0] ?? ALL_VARIANTS[card.game][0]!;
+// ---------------------------------------------------------------------------------------------
+// Finish (Normal / Holofoil / Reverse Holofoil / 1st Edition…)
+
+/** One-tap buttons for the finishes this printing exists in. */
+function finishChips(options: string[], current: string, onpick: (v: string) => void): HTMLElement {
+  const wrap = h('div', { class: 'chips', role: 'radiogroup', 'aria-label': 'Finish' });
+  const render = (sel: string): void =>
+    clear(
+      wrap,
+      options.map((v) =>
+        h(
+          'button',
+          {
+            type: 'button',
+            role: 'radio',
+            'aria-checked': String(v === sel),
+            class: v === sel ? 'chip on' : 'chip',
+            onclick: () => {
+              render(v);
+              onpick(v);
+            },
+          },
+          v,
+        ),
+      ),
+    );
+  render(current);
+  return wrap;
+}
+
+/** Teach the reverse-holo detector from a finish the user chose or confirmed. */
+function learn(card: CardPrinting, variant: string, shimmer: number | undefined): void {
+  if (shimmer !== undefined && card.variants.includes('Reverse Holofoil') && card.variants.length > 1) learnFinish(shimmer, variant === 'Reverse Holofoil');
 }
 
 // ---------------------------------------------------------------------------------------------
 
-export function openAddSheet(card: CardPrinting, hints?: ScanHints, onAdded?: (e: CollectionEntry) => void): void {
+export interface AddOptions {
+  hints?: ScanHints;
+  /** Reverse-holo shimmer measured on the scan, if this came from one. */
+  shimmer?: number;
+  onAdded?: (e: CollectionEntry) => void;
+}
+
+export async function openAddSheet(partialCard: CardPrinting, opts: AddOptions = {}): Promise<void> {
+  const card = partialCard.partial ? await GAMES[partialCard.game].complete(partialCard).catch(() => partialCard) : partialCard;
   const s = settings();
-  let variant = pickVariant(card, hints?.variant);
+  const hints = opts.hints ?? {};
+  let variant = guessFinish(card, hints, opts.shimmer).variant;
   let condition: Condition = s.defaultCondition;
-  let language = hints?.language && LANGUAGES.includes(hints.language) ? hints.language : s.defaultLanguage;
+  let language = hints.language && LANGUAGES.includes(hints.language) ? hints.language : s.defaultLanguage;
   let quantity = 1;
 
-  const variants = [...new Set([...card.variants, ...ALL_VARIANTS[card.game]])];
+  const others = ALL_VARIANTS[card.game].filter((v) => !card.variants.includes(v));
   const priceEl = h('div', { class: 'big-price' });
   const updatePrice = (): void => {
     const p = unitPrice(card, variant);
-    clear(priceEl, p !== undefined ? [money(p), h('small', null, ` each · ${variant}`)] : h('small', null, 'No price data'));
+    clear(priceEl, p !== undefined ? [money(p), h('small', null, ` each · ${variant}`)] : h('small', null, `No price for ${variant}`));
   };
   updatePrice();
+  const pick = (v: string): void => {
+    variant = v;
+    updatePrice();
+  };
 
   const sheet = openSheet(
     'Add to collection',
     h(
       'div',
       { class: 'add-sheet' },
-      h('div', { class: 'add-hero' }, cardImg(card, true), h('div', null, h('h3', null, card.name), cardMeta(card), priceEl, details(card))),
+      h('div', { class: 'add-hero' }, cardImg(card, true), h('div', null, h('h3', null, card.name), cardMeta(card), priceEl, priceNote(card), details(card))),
+      h('div', { class: 'field-label' }, 'Finish'),
+      finishChips(card.variants, variant, pick),
+      others.length > 0 && h('details', { class: 'more-finishes' }, h('summary', null, 'Other finish…'), finishChips(others, '', pick)),
       h(
         'div',
         { class: 'form-grid' },
-        h('label', null, 'Variant', select(variant, variants, (v) => ((variant = v), updatePrice()))),
         h('label', null, 'Condition', select(condition, CONDITIONS.map((c) => [c, `${c} · ${CONDITION_LABELS[c]}`] as [Condition, string]), (v) => (condition = v))),
         h('label', null, 'Language', select(language, LANGUAGES, (v) => (language = v))),
         h('label', null, 'Quantity', stepper(quantity, (v) => (quantity = v), 1)),
@@ -78,10 +120,11 @@ export function openAddSheet(card: CardPrinting, hints?: ScanHints, onAdded?: (e
           type: 'button',
           class: 'primary wide',
           onclick: async () => {
+            learn(card, variant, opts.shimmer);
             const { entry, undo } = await addCard(card, { variant, condition, language, quantity });
             sheet.close();
             addedToast(entry, undo);
-            onAdded?.(entry);
+            opts.onAdded?.(entry);
           },
         },
         'Add to collection',
@@ -90,11 +133,53 @@ export function openAddSheet(card: CardPrinting, hints?: ScanHints, onAdded?: (e
   );
 }
 
-export function addedToast(entry: CollectionEntry, undo: () => Promise<void>): void {
-  toast(
-    h('span', null, h('b', null, entry.card.name), ` ${entry.card.number} · ${entry.variant} · now ×${entry.quantity}`),
-    { action: 'Undo', onAction: () => void undo().then(() => toast('Removed')), tone: 'ok' },
-  );
+export function priceNote(card: CardPrinting): HTMLElement | false {
+  if (!card.priceSource) return false;
+  const when = card.pricesUpdatedAt ? new Date(card.pricesUpdatedAt) : undefined;
+  return h('div', { class: 'muted small' }, card.priceSource, when && !Number.isNaN(when.getTime()) ? ` · ${when.toLocaleDateString()}` : '');
+}
+
+/**
+ * "Added" toast with Undo and, when the printing exists in more than one finish, one-tap finish
+ * buttons, so a wrong foil guess is fixed without leaving the camera.
+ */
+export function addedToast(
+  entry: CollectionEntry,
+  undo: () => Promise<void>,
+  opts: { confidence?: number; shimmer?: number; onChange?: (prevId: string, next: CollectionEntry) => void } = {},
+): void {
+  let current = entry;
+  const label = h('span', null, h('b', null, entry.card.name), ` ${entry.card.number} · now ×${entry.quantity}`);
+  const options = entry.card.variants;
+  const ask = options.length > 1;
+  const unsure = ask && (opts.confidence ?? 1) < 0.7;
+  const chips =
+    ask &&
+    finishChips(options, entry.variant, (v) => {
+      learn(current.card, v, opts.shimmer);
+      if (v === current.variant) return;
+      const prevId = current.id;
+      // Move the one copy just scanned, not the whole row.
+      void (async () => {
+        if (current.quantity > 1) await updateEntry(current, { quantity: current.quantity - 1 });
+        else await deleteEntry(current.id);
+        const { entry: moved } = await addCard(current.card, { variant: v, condition: current.condition, language: current.language });
+        current = moved;
+        opts.onChange?.(prevId, moved);
+      })();
+    });
+  toast(h('div', null, label, unsure && h('div', { class: 'small warn' }, 'Which finish is it?'), chips), {
+    action: 'Undo',
+    onAction: () =>
+      void (async () => {
+        if (current.id === entry.id) await undo();
+        else if (current.quantity > 1) await updateEntry(current, { quantity: current.quantity - 1 });
+        else await deleteEntry(current.id);
+        toast('Removed');
+      })(),
+    tone: unsure ? 'warn' : 'ok',
+    ms: ask ? 9000 : 5000,
+  });
 }
 
 function details(card: CardPrinting): HTMLElement {
@@ -125,7 +210,7 @@ export function openCandidatesSheet(rec: Recognition, onAdded?: (e: CollectionEn
             c.card,
             () => {
               sheet.close();
-              openAddSheet(c.card, hints, onAdded);
+              void openAddSheet(c.card, { hints, shimmer: rec.shimmer, onAdded });
             },
             `${Math.round(c.score * 100)}%`,
           ),
@@ -191,8 +276,9 @@ export function openEntrySheet(entry: CollectionEntry): void {
           h('div', { class: 'eyebrow' }, GAME_LABEL[card.game]),
           cardMeta(card),
           valueEl,
+          priceNote(card),
           details(card),
-          card.url && h('a', { href: card.url, target: '_blank', rel: 'noopener', class: 'ext' }, card.source === 'ygoprodeck' ? 'View on YGOPRODeck ↗' : card.url.includes('scryfall.com') ? 'View on Scryfall ↗' : 'View on TCGplayer ↗'),
+          card.url && h('a', { href: card.url, target: '_blank', rel: 'noopener', class: 'ext' }, card.source === 'ygoprodeck' ? 'View on YGOPRODeck ↗' : 'View on TCGplayer ↗'),
         ),
       ),
       h(
@@ -209,11 +295,7 @@ export function openEntrySheet(entry: CollectionEntry): void {
         'Notes',
         h('textarea', { rows: 2, placeholder: 'Graded, signed, in binder 3…', onchange: (e: Event) => void save({ notes: (e.target as HTMLTextAreaElement).value || undefined }) }, entry.notes ?? ''),
       ),
-      h(
-        'p',
-        { class: 'muted small' },
-        `Added ${new Date(entry.addedAt).toLocaleDateString()} · price as of ${new Date(card.pricedAt ?? entry.addedAt).toLocaleDateString()} · data from ${card.source}`,
-      ),
+      h('p', { class: 'muted small' }, `Added ${new Date(entry.addedAt).toLocaleDateString()} · data from ${card.source}`),
       h(
         'button',
         {

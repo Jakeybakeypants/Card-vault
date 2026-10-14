@@ -17,6 +17,18 @@ describe('parsePokemon', () => {
     expect(parsePokemon({ bottom: 'G SVIEN 063/198 ¢' })).toMatchObject({ setCode: 'SVI', language: 'EN', number: '063' });
   });
 
+  it('does not mistake the language for a set code', () => {
+    const h = parsePokemon({ bottom: "'G svi EN 063/198 °" });
+    expect(h).toMatchObject({ number: '063', total: '198', language: 'EN' });
+    expect(h.setCode).toBeUndefined();
+  });
+
+  it('offers name-like words from a noisy name strip as search candidates', () => {
+    const h = parsePokemon({ name: '4 -\n~ A,\nk Metagross »" Sommseeaes - 100 HP "1' });
+    expect(h.nameCandidates).toContain('Metagross');
+    expect(parsePokemon({ name: 'BASIC Pi =H\n>> Pikachuz=Y 4,190 4}' }).nameCandidates).toContain('Pikachuz');
+  });
+
   it('drops misread stage words', () => {
     expect(parsePokemon({ name: 'sasic Pikachu we 60' }).name).toBe('Pikachu');
   });

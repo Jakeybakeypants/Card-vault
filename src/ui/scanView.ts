@@ -3,10 +3,10 @@ import { addCard } from '../db/store';
 import { Camera, canvasFromFile } from '../scan/camera';
 import { CARD_ASPECT } from '../scan/parse';
 import { onOcrProgress, ocrWorker } from '../scan/ocr';
-import { recognizeWithClaude, recognizeWithOcr, type Recognition } from '../scan/recognize';
-import type { CollectionEntry, GameId } from '../types';
+import { guessFinish, hasId, lookUp, mergeHints, readWithOcr, recognizeWithClaude, type Recognition } from '../scan/recognize';
+import type { CollectionEntry, GameId, ScanHints } from '../types';
 import { onSettings, settings, updateSettings } from '../util/settings';
-import { addedToast, cardImg, openCandidatesSheet, openEntrySheet, pickVariant } from './cards';
+import { addedToast, cardImg, openCandidatesSheet, openEntrySheet } from './cards';
 import { clear, h, LANGUAGES } from './dom';
 import { sheetOpen, toast } from './overlay';
 import type { View } from './view';
@@ -48,17 +48,48 @@ export function scanView(nav: { search: (q: string, game: GameId) => void }): Vi
     status.className = `scan-status ${tone}`;
   };
 
-  async function scan(card: HTMLCanvasElement): Promise<void> {
+  const showPreview = (card: HTMLCanvasElement): void => {
+    const preview = h('canvas', { width: card.width / 8, height: card.height / 8 });
+    preview.getContext('2d')!.drawImage(card, 0, 0, preview.width, preview.height);
+    clear(shot, preview);
+  };
+  const pause = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+  /**
+   * Read the card from up to `frames` successive photos, merging what each one could read, and
+   * stop as soon as the match is unambiguous. Glare moves between frames as the hand moves, so a
+   * number hidden in one is often readable in the next.
+   */
+  async function scan(grab: () => Promise<HTMLCanvasElement>, frames: number): Promise<void> {
     if (busy) return;
     busy = true;
     finder.classList.add('busy');
-    const preview = h('canvas', { width: card.width / 4, height: card.height / 4 });
-    preview.getContext('2d')!.drawImage(card, 0, 0, preview.width, preview.height);
-    clear(shot, preview);
     try {
       const s = settings();
-      const rec: Recognition =
-        s.useAi && s.anthropicApiKey ? await recognizeWithClaude(card, s.anthropicApiKey, setStatus) : await recognizeWithOcr(s.game, card, setStatus);
+      let rec: Recognition | undefined;
+      if (s.useAi && s.anthropicApiKey) {
+        const card = await grab();
+        showPreview(card);
+        setStatus('Asking Claude…');
+        rec = await recognizeWithClaude(card, s.anthropicApiKey);
+      } else {
+        const reads: ScanHints[] = [];
+        for (let i = 0; i < frames; i++) {
+          if (i > 0) await pause(150);
+          const card = await grab();
+          showPreview(card);
+          const read = await readWithOcr(s.game, card);
+          reads.push(read);
+          const merged = mergeHints(reads);
+          if (hasId(merged) || merged.name) {
+            setStatus('Looking it up…');
+            rec = await lookUp(s.game, merged, card);
+            if (isConfident(rec.candidates)) break;
+          }
+          if (i < frames - 1) setStatus(read.glare ? 'Glare on the card. Tilt it a little…' : `Still reading… (${i + 2}/${frames})`, read.glare ? 'warn' : '');
+        }
+        rec ??= { game: s.game, hints: mergeHints(reads), candidates: [] };
+      }
       await handle(rec);
     } catch (e) {
       console.error(e);
@@ -72,23 +103,31 @@ export function scanView(nav: { search: (q: string, game: GameId) => void }): Vi
   }
 
   async function handle(rec: Recognition): Promise<void> {
-    console.debug('[scan]', rec.hints, rec.candidates.slice(0, 5));
+    console.debug('[scan]', rec.hints, rec.candidates.slice(0, 5), 'shimmer', rec.shimmer);
     const top = rec.candidates[0];
     if (top && isConfident(rec.candidates) && settings().autoAdd) {
       const s = settings();
+      const finish = guessFinish(top.card, rec.hints, rec.shimmer);
       const { entry, undo } = await addCard(top.card, {
-        variant: pickVariant(top.card, rec.hints.variant),
+        variant: finish.variant,
         condition: s.defaultCondition,
         language: rec.hints.language && LANGUAGES.includes(rec.hints.language) ? rec.hints.language : s.defaultLanguage,
       });
       setStatus(`✓ ${top.card.name} · ${top.card.number}`, 'ok');
       navigator.vibrate?.(40);
-      addedToast(entry, undo);
+      addedToast(entry, undo, { confidence: finish.confidence, shimmer: rec.shimmer, onChange: replaceRemembered });
       remember(entry);
       return;
     }
-    setStatus(rec.candidates.length ? `${rec.candidates.length} possible matches` : 'No match', rec.candidates.length ? '' : 'warn');
+    const why = rec.hints.glare ? 'Glare is hiding part of the card. ' : '';
+    setStatus(rec.candidates.length ? `${why}${rec.candidates.length} possible matches` : `${why}No match`, rec.candidates.length && !why ? '' : 'warn');
     openCandidatesSheet(rec, remember, (q) => nav.search(q, rec.game));
+  }
+
+  function replaceRemembered(prevId: string, next: CollectionEntry): void {
+    const i = sessionEntries.findIndex((e) => e.id === prevId);
+    if (i >= 0) sessionEntries.splice(i, 1);
+    remember(next);
   }
 
   function remember(entry: CollectionEntry): void {
@@ -106,12 +145,12 @@ export function scanView(nav: { search: (q: string, game: GameId) => void }): Vi
 
   shutter.onclick = () => {
     if (!camera.running) return fileInput.click();
-    void scan(camera.captureGuide(guide));
+    void scan(async () => camera.captureGuide(guide), 4);
   };
-  fileInput.onchange = async () => {
+  fileInput.onchange = () => {
     const f = fileInput.files?.[0];
     fileInput.value = '';
-    if (f) void scan(await canvasFromFile(f));
+    if (f) void scan(() => canvasFromFile(f), 1);
   };
   torch.onclick = async () => {
     torchOn = !torchOn;

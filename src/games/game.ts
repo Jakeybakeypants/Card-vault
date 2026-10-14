@@ -10,17 +10,20 @@ export interface Game {
   parse(raw: Record<string, string>): ScanHints;
   /** Look the hints up in the catalog and return ranked candidate printings. */
   identify(hints: ScanHints): Promise<Candidate[]>;
+  /** 0–1: how well one printing's printed text matches what the scan read. */
+  score(card: CardPrinting, hints: ScanHints): number;
+  /** The scan read this printing's full identifier (number and set size / set code) exactly. */
+  exactId(card: CardPrinting, hints: ScanHints): boolean;
+  /** Fill in a `partial` search result (set, rarity, finishes, prices). */
+  complete(card: CardPrinting): Promise<CardPrinting>;
+  /** Re-fetch a saved card for current prices. `null` when the catalog no longer has it. */
+  refresh(card: CardPrinting): Promise<CardPrinting | null>;
   /** Free-text search for manual adds: a name, a collector number or a set code. */
   search(query: string): Promise<CardPrinting[]>;
   /** Every set in the catalog, newest first. */
   sets(): Promise<CardSet[]>;
-  /** Every printing in one set. */
+  /** Every printing in one set (may be `partial`). */
   setCards(set: CardSet): Promise<CardPrinting[]>;
-  /**
-   * Today's catalog data for cards already in the collection, keyed by `CardPrinting.key`.
-   * Cards the catalog can't find again are left out.
-   */
-  refresh(cards: CardPrinting[]): Promise<Map<string, CardPrinting>>;
 }
 
 /** Scanned results are trusted enough to add without asking when this returns true. */
@@ -49,7 +52,9 @@ export function rank(candidates: Candidate[]): Candidate[] {
   const seen = new Map<string, Candidate>();
   for (const c of candidates) {
     const prev = seen.get(c.card.key);
-    if (!prev || prev.score < c.score) seen.set(c.card.key, c);
+    // The same printing can arrive as a full record and as a partial one: keep the fuller record.
+    const better = !prev || (prev.card.partial && !c.card.partial) || (!!prev.card.partial === !!c.card.partial && prev.score < c.score);
+    if (better) seen.set(c.card.key, prev ? { ...c, score: Math.max(c.score, prev.score) } : c);
   }
   return [...seen.values()].sort(
     (a, b) => b.score - a.score || (b.card.releaseDate ?? '').localeCompare(a.card.releaseDate ?? ''),

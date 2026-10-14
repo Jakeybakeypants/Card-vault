@@ -2,7 +2,7 @@ import { parseYugioh, REGIONS } from '../scan/parse';
 import type { Candidate, CardPrinting, CardSet, ScanHints } from '../types';
 import { partialSimilarity, similarity } from '../util/text';
 import { rank, weightedScore, type Game } from './game';
-import { chunks, getJson, getJsonOrNull, qs } from './http';
+import { getJson, getJsonOrNull, qs } from './http';
 
 // YGOPRODeck API v7: free and keyless (20 requests/second). https://ygoprodeck.com/api-guide/
 const API = 'https://db.ygoprodeck.com/api/v7';
@@ -68,7 +68,9 @@ function printing(card: YgoCard, set: YgoSet | undefined): CardPrinting {
   details.Passcode = String(card.id).padStart(8, '0');
 
   const img = card.card_images[0];
-  const p = price(set?.set_price) ?? price(card.card_prices?.[0]?.tcgplayer_price);
+  // Only the printing's own price. `card_prices` is the cheapest copy across every printing of the
+  // card, which badly undervalues the original or rarer prints.
+  const p = price(set?.set_price);
   const edition = set?.set_edition && YUGIOH_VARIANTS.find((v) => set.set_edition!.toLowerCase().startsWith(v.toLowerCase()));
   return {
     game: 'yugioh',
@@ -81,6 +83,8 @@ function printing(card: YgoCard, set: YgoSet | undefined): CardPrinting {
     image: img?.image_url_small,
     imageLarge: img?.image_url,
     prices: p !== undefined ? { default: p } : undefined,
+    priceSource: p !== undefined ? 'TCGplayer (via YGOPRODeck)' : undefined,
+    pricesUpdatedAt: p !== undefined ? new Date().toISOString() : undefined,
     variants: edition ? [edition, ...YUGIOH_VARIANTS.filter((v) => v !== edition)] : YUGIOH_VARIANTS,
     url: card.ygoprodeck_url,
     details,
@@ -137,6 +141,21 @@ export const yugioh: Game = {
   name: 'Yu-Gi-Oh!',
   regions: REGIONS.yugioh,
   parse: parseYugioh,
+
+  score,
+
+  exactId: (card, hints) => !!hints.setCode && card.number.toUpperCase() === hints.setCode.toUpperCase(),
+
+  async complete(card) {
+    return card;
+  },
+
+  async refresh(card) {
+    const fresh = await cardById(String(Number(card.details.Passcode ?? '')));
+    if (!fresh) return null;
+    const all = printings(fresh);
+    return all.find((c) => c.key === card.key) ?? all.find((c) => c.number === card.number) ?? null;
+  },
 
   async identify(hints) {
     const jobs: Array<Promise<CardPrinting[]>> = [];
@@ -196,16 +215,5 @@ export const yugioh: Game = {
   async setCards(set) {
     const res = await getJsonOrNull<{ data: YgoCard[] }>(`${API}/cardinfo.php?${qs({ cardset: set.name })}`, { timeoutMs: 30000 });
     return (res?.data ?? []).flatMap((card) => (card.card_sets ?? []).filter((s) => s.set_name === set.name).map((s) => printing(card, s)));
-  },
-
-  async refresh(cards) {
-    // Look cards up by passcode, 40 per request, and pick each owned printing back out.
-    const out = new Map<string, CardPrinting>();
-    const ids = [...new Set(cards.map((c) => c.details.Passcode).filter((p): p is string => !!p).map((p) => String(Number(p))))];
-    for (const chunk of chunks(ids, 40)) {
-      const res = await getJsonOrNull<{ data: YgoCard[] }>(`${API}/cardinfo.php?${qs({ id: chunk.join(',') })}`, { timeoutMs: 30000, fresh: true });
-      for (const card of res?.data ?? []) for (const p of printings(card)) out.set(p.key, p);
-    }
-    return out;
   },
 };

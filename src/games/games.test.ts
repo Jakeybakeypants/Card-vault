@@ -72,22 +72,6 @@ describe('pokemon.identify', () => {
   });
 });
 
-describe('pokemon sets', () => {
-  it('lists sets and pages through a big set', async () => {
-    const page = (n: number, from: number) => Array.from({ length: n }, (_, i) => ptcgCard(`sv2-${from + i}`, `Card ${from + i}`, String(from + i), 'sv2', 193));
-    const seen = stubFetch([
-      [/v2\/sets/, { data: [{ id: 'sv2', name: 'Paldea Evolved', series: 'Scarlet & Violet', total: 279, ptcgoCode: 'PAL', releaseDate: '2023/06/09', images: { symbol: 's', logo: 'l' } }] }],
-      [/set\.id:sv2.*page=1/, { data: page(250, 1), totalCount: 279 }],
-      [/set\.id:sv2.*page=2/, { data: page(29, 251), totalCount: 279 }],
-    ]);
-    const [set] = await pokemon.sets();
-    expect(set).toMatchObject({ id: 'sv2', code: 'PAL', total: 279, releaseDate: '2023-06-09' });
-    const cards = await pokemon.setCards(set!);
-    expect(cards).toHaveLength(279);
-    expect(seen.filter((u) => u.includes('set.id:sv2'))).toHaveLength(2);
-  });
-});
-
 describe('yugioh.identify', () => {
   const darkMagician = {
     id: 46986414,
@@ -130,17 +114,6 @@ describe('yugioh.identify', () => {
     expect(res[0]!.card.number).toBe('SDY-EN006');
   });
 
-  it('lists the printings of one set', async () => {
-    stubFetch([
-      [/cardsets\.php/, [{ set_name: 'Starter Deck: Yugi', set_code: 'SDY', num_of_cards: 50, tcg_date: '2002-03-29' }, { set_name: 'Legend of Blue Eyes White Dragon', set_code: 'LOB', num_of_cards: 126, tcg_date: '2002-03-08' }]],
-      [/cardset=Legend/, { data: [darkMagician] }],
-    ]);
-    const sets = await yugioh.sets();
-    expect(sets.map((s) => s.code)).toEqual(['SDY', 'LOB']);
-    const cards = await yugioh.setCards(sets[1]!);
-    expect(cards.map((c) => c.key)).toEqual(['LOB-EN005:Ultra Rare']);
-  });
-
   it('asks which printing when only the passcode is known', async () => {
     stubFetch([[/cardinfo\.php\?id=46986414/, { data: [darkMagician] }]]);
     const res = await yugioh.identify({ passcode: '46986414' });
@@ -149,10 +122,134 @@ describe('yugioh.identify', () => {
   });
 });
 
+describe('TCGdex (primary Pokémon catalog)', () => {
+  const dexCard = {
+    id: 'swsh3-136',
+    localId: '136',
+    name: 'Furret',
+    image: 'https://assets.tcgdex.net/en/swsh/swsh3/136',
+    rarity: 'Uncommon',
+    category: 'Pokemon',
+    hp: 110,
+    types: ['Colorless'],
+    stage: 'Stage1',
+    variants: { normal: true, reverse: true, holo: false, firstEdition: false },
+    set: { id: 'swsh3', name: 'Darkness Ablaze', cardCount: { official: 189, total: 201 } },
+    pricing: {
+      cardmarket: { unit: 'EUR', trend: 0.1, 'trend-holo': 0.3 },
+      tcgplayer: {
+        updated: '2026-10-12T00:00:00Z',
+        unit: 'USD',
+        normal: { productId: 216712, lowPrice: 0.02, midPrice: 0.15, marketPrice: 0.12 },
+        'reverse-holofoil': { productId: 216712, lowPrice: 0.1, midPrice: 0.4, marketPrice: 0.33 },
+      },
+    },
+  };
+
+  it('reads per-finish TCGplayer prices and the finishes the card exists in', async () => {
+    const { fromDex } = await import('./tcgdex');
+    const card = fromDex(dexCard);
+    expect(card).toMatchObject({ key: 'swsh3-136', number: '136/189', setName: 'Darkness Ablaze', image: 'https://assets.tcgdex.net/en/swsh/swsh3/136/low.webp' });
+    expect(card.prices).toEqual({ Normal: 0.12, 'Reverse Holofoil': 0.33 });
+    expect(card.variants).toEqual(['Normal', 'Reverse Holofoil']);
+    expect(card.url).toBe('https://www.tcgplayer.com/product/216712');
+    expect(card.pricesUpdatedAt).toBeDefined();
+  });
+
+  it('lists holo first for holo rares and tolerates null markets', async () => {
+    const { fromDex } = await import('./tcgdex');
+    const holo = fromDex({ ...dexCard, variants: { holo: true, reverse: true }, pricing: { tcgplayer: null } });
+    expect(holo.variants).toEqual(['Holofoil', 'Reverse Holofoil']);
+    expect(holo.prices).toBeUndefined();
+  });
+
+  it('finds a card by number and set size', async () => {
+    const seen = stubFetch([
+      [/tcgdex\.net\/v2\/en\/sets$/, [{ id: 'swsh3', name: 'Darkness Ablaze', cardCount: { official: 189, total: 201 } }, { id: 'A1', name: 'Pocket', cardCount: { official: 189, total: 189 } }]],
+      [/tcgdex\.net\/v2\/en\/sets\/swsh3\/136$/, dexCard],
+    ]);
+    const res = await pokemon.identify({ number: '136', total: '189', name: 'Furret', nameText: 'STAGE 1 Furret HP 110' });
+    expect(res[0]!.card).toMatchObject({ key: 'swsh3-136', source: 'tcgdex', prices: { Normal: 0.12 } });
+    expect(isConfident(res)).toBe(true);
+    // TCG Pocket sets are skipped.
+    expect(seen.some((u) => u.includes('/sets/A1/'))).toBe(false);
+  });
+
+  it('returns partial results for name searches and completes them on demand', async () => {
+    stubFetch([
+      [/tcgdex\.net\/v2\/en\/cards\?name=Furret/, [{ id: 'swsh3-136', localId: '136', name: 'Furret', image: 'x' }, { id: 'sv4-150', localId: '150', name: 'Furret', image: 'y' }]],
+      [/tcgdex\.net\/v2\/en\/cards\/swsh3-136$/, dexCard],
+    ]);
+    const res = await pokemon.identify({ name: 'Furret', nameText: 'Furret' });
+    expect(res).toHaveLength(2);
+    expect(res.every((c) => c.card.partial)).toBe(true);
+    const full = await pokemon.complete(res.find((c) => c.card.key === 'swsh3-136')!.card);
+    expect(full.partial).toBeFalsy();
+    expect(full).toMatchObject({ setName: 'Darkness Ablaze', prices: { 'Reverse Holofoil': 0.33 } });
+  });
+});
+
+describe('yugioh prices', () => {
+  it('does not use the cheapest-printing price for a printing without its own', async () => {
+    stubFetch([
+      [/cardinfo\.php\?id=1/, { data: [{ id: 1, name: 'X', type: 'Normal Monster', frameType: 'normal', desc: '', race: 'Warrior', card_sets: [{ set_name: 'S', set_code: 'S-EN001', set_rarity: 'Secret Rare', set_price: '0' }], card_images: [{ id: 1, image_url: 'a', image_url_small: 'b' }], card_prices: [{ tcgplayer_price: '0.10' }] }] }],
+    ]);
+    const res = await yugioh.identify({ passcode: '1' });
+    expect(res[0]!.card.prices).toBeUndefined();
+  });
+});
+
+describe('binder sets', () => {
+  it('lists TCGdex sets newest first, without TCG Pocket', async () => {
+    stubFetch([
+      [/tcgdex\.net\/v2\/en\/sets$/, [
+        { id: 'base1', name: 'Base Set', logo: 'https://assets.example/base1', cardCount: { official: 102, total: 102 } },
+        { id: 'A1', name: 'Genetic Apex', cardCount: { official: 226, total: 286 } },
+        { id: 'sv01', name: 'Scarlet & Violet', cardCount: { official: 198, total: 258 } },
+      ]],
+    ]);
+    const sets = await pokemon.sets();
+    expect(sets.map((s) => [s.id, s.total])).toEqual([['sv01', 258], ['base1', 102]]);
+    expect(sets[1]!.logo).toBe('https://assets.example/base1.webp');
+  });
+
+  it('lists a TCGdex set as partial cards with set name and size', async () => {
+    stubFetch([[/sets\/sv01$/, { id: 'sv01', name: 'Scarlet & Violet', cardCount: { official: 198, total: 258 }, cards: [{ id: 'sv01-025', localId: '025', name: 'Pikachu', image: 'https://assets.example/sv01/025' }] }]]);
+    const [card] = await pokemon.setCards({ game: 'pokemon', id: 'sv01', name: 'Scarlet & Violet', code: 'SV01', total: 258 });
+    expect(card).toMatchObject({ key: 'sv01-025', setName: 'Scarlet & Violet', number: '025/198', partial: true });
+  });
+
+  it('falls back to pokemontcg.io and pages through a big set', async () => {
+    const page = (n: number, from: number) => Array.from({ length: n }, (_, i) => ptcgCard(`sv2-${from + i}`, `Card ${from + i}`, String(from + i), 'sv2', 193));
+    const seen = stubFetch([
+      [/pokemontcg\.io\/v2\/sets/, { data: [{ id: 'sv2', name: 'Paldea Evolved', series: 'Scarlet & Violet', total: 279, ptcgoCode: 'PAL', releaseDate: '2023/06/09', images: { symbol: 's', logo: 'l' } }] }],
+      [/set\.id:sv2.*page=1/, { data: page(250, 1), totalCount: 279 }],
+      [/set\.id:sv2.*page=2/, { data: page(29, 251), totalCount: 279 }],
+    ]);
+    const [set] = await pokemon.sets();
+    expect(set).toMatchObject({ id: 'ptcg:sv2', code: 'PAL', total: 279, releaseDate: '2023-06-09' });
+    expect(await pokemon.setCards(set!)).toHaveLength(279);
+    expect(seen.filter((u) => u.includes('set.id:sv2'))).toHaveLength(2);
+  });
+
+  it('lists the printings of one Yu-Gi-Oh! set', async () => {
+    const card = { id: 46986414, name: 'Dark Magician', type: 'Normal Monster', frameType: 'normal', desc: '', race: 'Spellcaster',
+      card_sets: [{ set_name: 'Legend of Blue Eyes White Dragon', set_code: 'LOB-EN005', set_rarity: 'Ultra Rare', set_price: '45.10' }, { set_name: 'Starter Deck: Yugi', set_code: 'SDY-006', set_rarity: 'Ultra Rare', set_price: '12.00' }],
+      card_images: [{ id: 46986414, image_url: 'a', image_url_small: 'b' }] };
+    stubFetch([
+      [/cardsets\.php/, [{ set_name: 'Starter Deck: Yugi', set_code: 'SDY', num_of_cards: 50, tcg_date: '2002-03-29' }, { set_name: 'Legend of Blue Eyes White Dragon', set_code: 'LOB', num_of_cards: 126, tcg_date: '2002-03-08' }]],
+      [/cardset=Legend/, { data: [card] }],
+    ]);
+    const sets = await yugioh.sets();
+    expect(sets.map((s) => s.code)).toEqual(['SDY', 'LOB']);
+    expect((await yugioh.setCards(sets[1]!)).map((c) => c.key)).toEqual(['LOB-EN005:Ultra Rare']);
+  });
+});
+
 describe('mtg', () => {
-  const bolt = (set: string, number: string) => ({
+  const bolt = (set: string, number: string, usd = '1.50') => ({
     id: `${set}-${number}`, name: 'Lightning Bolt', set, set_name: `Set ${set}`, collector_number: number, rarity: 'common', released_at: '2020-07-03',
-    type_line: 'Instant', mana_cost: '{R}', finishes: ['nonfoil', 'foil'], prices: { usd: '1.50', usd_foil: '4.00', usd_etched: null },
+    type_line: 'Instant', mana_cost: '{R}', finishes: ['nonfoil', 'foil'], prices: { usd, usd_foil: '4.00', usd_etched: null },
     image_uris: { small: 's', normal: 'n', large: 'l' },
   });
 
@@ -162,9 +259,11 @@ describe('mtg', () => {
       [/cards\/named/, bolt('m21', '125')],
       [/cards\/search/, { data: [bolt('m21', '125'), bolt('2xm', '117')] }],
     ]);
-    const res = await mtg.identify({ setCode: 'M21', number: '125', name: 'Lightning Bolt', nameText: 'Lightning Bolt' });
+    const hints = { setCode: 'M21', number: '125', name: 'Lightning Bolt', nameText: 'Lightning Bolt' };
+    const res = await mtg.identify(hints);
     expect(res[0]!.card).toMatchObject({ key: 'm21-125', setCode: 'M21', number: '125', prices: { Normal: 1.5, Foil: 4 }, variants: ['Normal', 'Foil'] });
     expect(isConfident(res)).toBe(true);
+    expect(mtg.exactId(res[0]!.card, hints)).toBe(true);
   });
 
   it('pages through a set', async () => {
@@ -184,6 +283,13 @@ describe('mtg', () => {
     ] }]]);
     expect((await mtg.sets()).map((s) => s.code)).toEqual(['M21']);
   });
+
+  it('refreshes a saved card by set and number', async () => {
+    stubFetch([[/cards\/m21\/125/, bolt('m21', '125', '2.25')]]);
+    const fresh = await mtg.refresh({ game: 'mtg', key: 'm21-125', name: 'Lightning Bolt', setName: 'M21', setCode: 'M21', number: '125', variants: [], details: {}, source: 'scryfall' });
+    expect(fresh?.prices).toEqual({ Normal: 2.25, Foil: 4 });
+    expect(fresh?.pricesUpdatedAt).toBeTruthy();
+  });
 });
 
 describe('lorcana', () => {
@@ -192,7 +298,7 @@ describe('lorcana', () => {
     image_uris: { digital: { small: 's', normal: 'n', large: 'l' } }, prices: { usd: '2.00', usd_foil: '6.00' },
   });
 
-  it('matches a scan against the whole catalog and counts set sizes', async () => {
+  it('matches a scan against the whole catalog, counts set sizes and refreshes', async () => {
     stubFetch([
       [/v0\/sets\/1\/cards/, [lc('1', '115', 'Mickey Mouse', 'Brave Little Tailor'), lc('1', '12', 'Elsa', 'Snow Queen')]],
       [/v0\/sets\/2\/cards/, [lc('2', '115', 'Stitch', 'Rock Star')]],
@@ -203,35 +309,6 @@ describe('lorcana', () => {
     expect(isConfident(res)).toBe(true);
     expect((await lorcana.sets()).map((s) => [s.code, s.total])).toEqual([['2', 1], ['1', 2]]);
     expect((await lorcana.search('elsa')).map((c) => c.key)).toEqual(['1-12']);
-  });
-});
-
-describe('price refresh', () => {
-  it('pokemon batches ids into one query and skips TCGdex cards', async () => {
-    const seen = stubFetch([[/id:"sv1-63"/, { data: [{ ...ptcgCard('sv1-63', 'Pikachu', '63', 'sv1', 198), tcgplayer: { url: 'x', prices: { normal: { market: 0.4, mid: 0.5 } } } }] }]]);
-    const res = await pokemon.refresh([
-      { game: 'pokemon', key: 'sv1-63', name: 'Pikachu', setName: 'S', setCode: 'SVI', number: '63/198', variants: [], details: {}, source: 'pokemontcg.io' },
-      { game: 'pokemon', key: 'sv01-063', name: 'Pikachu', setName: 'S', setCode: 'sv01', number: '063/198', variants: [], details: {}, source: 'tcgdex' },
-    ]);
-    expect(seen).toHaveLength(1);
-    expect(res.get('sv1-63')?.prices).toEqual({ Normal: 0.4 });
-  });
-
-  it('yugioh refreshes by passcode and returns each printing', async () => {
-    const seen = stubFetch([[/cardinfo\.php\?id=46986414/, { data: [{ id: 46986414, name: 'Dark Magician', type: 'Normal Monster', frameType: 'normal', desc: '', race: 'Spellcaster',
-      card_sets: [{ set_name: 'LOB', set_code: 'LOB-EN005', set_rarity: 'Ultra Rare', set_price: '50.00' }], card_images: [{ id: 1, image_url: 'a', image_url_small: 'b' }] }] }]]);
-    const res = await yugioh.refresh([{ game: 'yugioh', key: 'LOB-EN005:Ultra Rare', name: 'Dark Magician', setName: 'LOB', setCode: 'LOB', number: 'LOB-EN005', variants: [], details: { Passcode: '46986414' }, source: 'ygoprodeck' }]);
-    expect(seen.some((u) => u.includes('id=46986414'))).toBe(true);
-    expect(res.get('LOB-EN005:Ultra Rare')?.prices).toEqual({ default: 50 });
-  });
-
-  it('bypasses the session cache', async () => {
-    let price = '1.00';
-    vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => {} });
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ id: 'x', name: 'Bolt', set: 'm21', set_name: 'M21', collector_number: '125', rarity: 'common', prices: { usd: price } }), { status: 200 })));
-    const card = { game: 'mtg' as const, key: 'm21-125', name: 'Bolt', setName: 'M21', setCode: 'M21', number: '125', variants: [], details: {}, source: 'scryfall' };
-    expect((await mtg.refresh([card])).get('m21-125')?.prices).toEqual({ Normal: 1 });
-    price = '2.00';
-    expect((await mtg.refresh([card])).get('m21-125')?.prices).toEqual({ Normal: 2 });
+    expect((await lorcana.refresh(res[0]!.card))?.key).toBe('1-115');
   });
 });

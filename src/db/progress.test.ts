@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type { CardPrinting, CardSet, CollectionEntry } from '../types';
 import { entryInSet, filledAt, ownedSlots, slotsFor } from './progress';
 
@@ -9,7 +9,7 @@ function entry(c: CardPrinting, addedAt = '2026-01-01T00:00:00Z', variant = 'Nor
   return { id: `${c.key}|${variant}`, card: c, quantity: 1, variant, condition: 'NM', language: 'EN', addedAt, updatedAt: addedAt };
 }
 
-const sv1: CardSet = { game: 'pokemon', id: 'sv1', name: 'Scarlet & Violet', code: 'SVI', total: 258 };
+const sv1: CardSet = { game: 'pokemon', id: 'ptcg:sv1', name: 'Scarlet & Violet', code: 'SVI', total: 258 };
 
 describe('slotsFor', () => {
   it('orders by collector number and merges duplicates', () => {
@@ -34,27 +34,19 @@ describe('ownedSlots', () => {
     expect(owned.get('25')).toHaveLength(2);
   });
 
-  it('matches TCGdex entries to pokemontcg.io sets by name', () => {
-    const dex = card({ key: 'sv01-025', number: '025/198', source: 'tcgdex' });
-    expect(entryInSet(entry(dex), sv1)).toBe(true);
-    expect(ownedSlots(sv1, [entry(dex)]).has('25')).toBe(true);
+  it('matches pokemontcg.io entries to TCGdex sets by name', () => {
+    const dexSet: CardSet = { ...sv1, id: 'sv01' };
+    const ptcg = card({ key: 'sv1-25', number: '25/198', source: 'pokemontcg.io' });
+    expect(entryInSet(entry(ptcg), dexSet)).toBe(true);
+    expect(ownedSlots(dexSet, [entry(card({ key: 'sv01-025', number: '025/198', source: 'tcgdex' }))]).has('25')).toBe(true);
   });
 
   it('does not match a same-named set by name within one catalog', () => {
-    expect(entryInSet(entry(card({ key: 'other-1', number: '1/10' })), sv1)).toBe(false);
+    expect(entryInSet(entry(card({ key: 'other-1', number: '1/10', source: 'tcgdex' })), { ...sv1, id: 'sv01' })).toBe(false);
   });
 });
 
 it('filledAt is the earliest add', () => {
   const c = card({ key: 'sv1-1', number: '1/198' });
   expect(filledAt([entry(c, '2026-03-01T00:00:00Z'), entry(c, '2026-02-01T00:00:00Z')])).toBe('2026-02-01T00:00:00Z');
-});
-
-it('withFreshPrices swaps prices only', async () => {
-  vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => {} });
-  const { withFreshPrices } = await import('./prices');
-  const old = entry(card({ key: 'sv1-1', number: '1/198', prices: { Normal: 1 }, rarity: 'Common' }));
-  const next = withFreshPrices(old, card({ key: 'sv1-1', number: '1/198', prices: { Normal: 3 }, name: 'Renamed' }), '2026-10-13T00:00:00Z');
-  expect(next.card).toMatchObject({ name: 'X', rarity: 'Common', prices: { Normal: 3 }, pricedAt: '2026-10-13T00:00:00Z' });
-  expect(next.quantity).toBe(old.quantity);
 });

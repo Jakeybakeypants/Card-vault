@@ -71,6 +71,8 @@ export function fromLorcast(c: LcCard): CardPrinting {
     image: img?.normal ?? img?.small,
     imageLarge: img?.large ?? img?.normal,
     prices: Object.keys(prices).length ? prices : undefined,
+    priceSource: Object.keys(prices).length ? 'TCGplayer (via Lorcast)' : undefined,
+    pricesUpdatedAt: Object.keys(prices).length ? new Date().toISOString() : undefined,
     variants: foilOnly ? ['Foil'] : LORCANA_VARIANTS,
     releaseDate: c.released_at,
     details,
@@ -78,20 +80,19 @@ export function fromLorcast(c: LcCard): CardPrinting {
   };
 }
 
-async function listSets(fresh = false): Promise<LcSet[]> {
-  const res = await getJson<{ results: LcSet[] }>(`${API}/sets`, { fresh });
+async function listSets(): Promise<LcSet[]> {
+  const res = await getJson<{ results: LcSet[] }>(`${API}/sets`);
   return res.results;
 }
 
-function cardsIn(code: string, fresh = false): Promise<LcCard[]> {
-  return getJson<LcCard[]>(`${API}/sets/${encodeURIComponent(code)}/cards`, { timeoutMs: 30000, fresh });
+function cardsIn(code: string): Promise<LcCard[]> {
+  return getJson<LcCard[]>(`${API}/sets/${encodeURIComponent(code)}/cards`, { timeoutMs: 30000 });
 }
 
 let catalog: Promise<CardPrinting[]> | null = null;
-function allCards(fresh = false): Promise<CardPrinting[]> {
-  if (fresh) catalog = null;
-  catalog ??= listSets(fresh)
-    .then((sets) => pool(sets, 3, (s) => cardsIn(s.code, fresh).catch(() => [] as LcCard[])))
+function allCards(): Promise<CardPrinting[]> {
+  catalog ??= listSets()
+    .then((sets) => pool(sets, 3, (s) => cardsIn(s.code).catch(() => [] as LcCard[])))
     .then((lists) => lists.flat().map(fromLorcast));
   catalog.catch(() => (catalog = null));
   return catalog;
@@ -107,8 +108,8 @@ function score(card: CardPrinting, hints: ScanHints): number {
 }
 
 function match(cards: CardPrinting[], hints: ScanHints): Candidate[] {
-  const pool = hints.number ? cards.filter((c) => sameCollectorNumber(c.number, hints.number!)) : cards;
-  const scored = (pool.length ? pool : cards).map((card): Candidate => ({ card, score: score(card, hints) }));
+  const sameNumber = hints.number ? cards.filter((c) => sameCollectorNumber(c.number, hints.number!)) : cards;
+  const scored = (sameNumber.length ? sameNumber : cards).map((card): Candidate => ({ card, score: score(card, hints) }));
   return rank(scored.filter((c) => c.score >= 0.45)).slice(0, 60);
 }
 
@@ -117,6 +118,13 @@ export const lorcana: Game = {
   name: 'Lorcana',
   regions: REGIONS.lorcana,
   parse: parseLorcana,
+
+  score,
+  exactId: (card, hints) => !!hints.number && !!hints.setCode && sameCollectorNumber(card.number, hints.number) && normalize(card.setCode) === normalize(hints.setCode),
+
+  async complete(card) {
+    return card;
+  },
 
   async identify(hints) {
     if (!hints.number && !hints.name) return [];
@@ -155,10 +163,9 @@ export const lorcana: Game = {
     return (await cardsIn(set.id)).map(fromLorcast);
   },
 
-  async refresh(cards) {
-    // Re-download the (small) catalog and pick the owned cards out of it.
-    const wanted = new Set(cards.map((c) => c.key));
-    const all = await allCards(true);
-    return new Map(all.filter((c) => wanted.has(c.key)).map((c) => [c.key, c]));
+  async refresh(card) {
+    // The catalog is fetched once per session (the daily refresh runs at launch), so this is
+    // one download for the whole collection.
+    return (await allCards()).find((c) => c.key === card.key) ?? null;
   },
 };

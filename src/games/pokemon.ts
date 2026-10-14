@@ -3,11 +3,13 @@ import type { Candidate, CardPrinting, CardSet, ScanHints } from '../types';
 import { normalize, partialSimilarity, sameCollectorNumber, stripLeadingZeros } from '../util/text';
 import { settings } from '../util/settings';
 import { rank, weightedScore, type Game } from './game';
-import { chunks, getJson, getJsonOrNull, qs } from './http';
+import { getJson, getJsonOrNull, qs } from './http';
+import { dexByName, dexByNumber, dexCard, dexSetCards, dexSets } from './tcgdex';
 
 // ---------------------------------------------------------------------------------------------
-// pokemontcg.io v2 (primary): rich data including TCGplayer market prices. Works without a key;
-// a free key from https://dev.pokemontcg.io raises the rate limit.
+// Catalogs. TCGdex (tcgdex.ts) is primary: free, maintained, and priced per printing.
+// pokemontcg.io v2 is the fallback when TCGdex is unreachable or finds nothing. Its free price
+// data is limited and it is being wound down in favour of the paid Scrydex service.
 // ---------------------------------------------------------------------------------------------
 
 interface PtcgPrice {
@@ -30,7 +32,6 @@ interface PtcgCard {
 }
 
 const PTCG = 'https://api.pokemontcg.io/v2/cards';
-const PTCG_SETS = 'https://api.pokemontcg.io/v2/sets';
 const SELECT = 'id,name,supertype,subtypes,hp,types,number,artist,rarity,set,images,tcgplayer';
 
 /** TCGplayer price keys → the variant labels shown in the app. */
@@ -70,6 +71,8 @@ function fromPtcg(c: PtcgCard): CardPrinting {
     image: c.images.small,
     imageLarge: c.images.large,
     prices: priced.length ? prices : undefined,
+    priceSource: priced.length ? 'TCGplayer market (via pokemontcg.io)' : undefined,
+    pricesUpdatedAt: priced.length ? new Date().toISOString() : undefined,
     variants: priced.length ? priced : defaultVariants(c.rarity),
     releaseDate: c.set.releaseDate?.replace(/\//g, '-'),
     url: c.tcgplayer?.url,
@@ -103,11 +106,12 @@ interface PtcgSet {
   images: { symbol: string; logo: string };
 }
 
+/** Set list from pokemontcg.io, for the binder when TCGdex is down. Ids are prefixed `ptcg:`. */
 async function ptcgSets(): Promise<CardSet[]> {
-  const res = await getJson<{ data: PtcgSet[] }>(`${PTCG_SETS}?${qs({ orderBy: '-releaseDate', pageSize: 250 })}`, { headers: ptcgHeaders(), timeoutMs: 20000 });
+  const res = await getJson<{ data: PtcgSet[] }>(`https://api.pokemontcg.io/v2/sets?${qs({ orderBy: '-releaseDate', pageSize: 250 })}`, { headers: ptcgHeaders(), timeoutMs: 20000 });
   return res.data.map((s) => ({
     game: 'pokemon',
-    id: s.id,
+    id: `ptcg:${s.id}`,
     name: s.name,
     code: s.ptcgoCode ?? s.id.toUpperCase(),
     total: s.total,
@@ -117,7 +121,7 @@ async function ptcgSets(): Promise<CardSet[]> {
   }));
 }
 
-/** All cards in a set, a page (max 250) at a time. */
+/** All cards in a pokemontcg.io set, a page (max 250) at a time. */
 async function ptcgSetCards(setId: string): Promise<CardPrinting[]> {
   const out: PtcgCard[] = [];
   for (let page = 1; page <= 10; page++) {
@@ -151,122 +155,35 @@ function nameClause(name: string): string {
 }
 
 // ---------------------------------------------------------------------------------------------
-// TCGdex (fallback): free and keyless, used when pokemontcg.io is down or rate limited.
-// ---------------------------------------------------------------------------------------------
-
-const TCGDEX = 'https://api.tcgdex.net/v2/en';
-
-interface DexCardBrief {
-  id: string;
-  localId: string;
-  name: string;
-  image?: string;
-}
-interface DexCard extends DexCardBrief {
-  rarity?: string;
-  category?: string;
-  hp?: number;
-  types?: string[];
-  illustrator?: string;
-  variants?: { normal?: boolean; reverse?: boolean; holo?: boolean; firstEdition?: boolean };
-  set: { id: string; name: string; cardCount: { official: number; total: number } };
-}
-interface DexSetBrief {
-  id: string;
-  name: string;
-  logo?: string;
-  cardCount: { official: number; total: number };
-}
-
-async function dexSets(): Promise<CardSet[]> {
-  const list = await getJson<DexSetBrief[]>(`${TCGDEX}/sets`);
-  // TCGdex lists oldest first and has no release dates in the listing.
-  return list.reverse().map((s) => ({
-    game: 'pokemon',
-    id: `dex:${s.id}`,
-    name: s.name,
-    code: s.id.toUpperCase(),
-    total: s.cardCount.total,
-    logo: s.logo ? `${s.logo}.webp` : undefined,
-  }));
-}
-
-async function dexSetCards(setId: string): Promise<CardPrinting[]> {
-  const set = await getJson<DexSetBrief & { cards: DexCardBrief[] }>(`${TCGDEX}/sets/${encodeURIComponent(setId)}`);
-  return set.cards.map((c) => ({
-    game: 'pokemon',
-    key: c.id,
-    name: c.name,
-    setName: set.name,
-    setCode: set.id,
-    number: `${c.localId}/${set.cardCount.official}`,
-    image: c.image ? `${c.image}/low.webp` : undefined,
-    imageLarge: c.image ? `${c.image}/high.webp` : undefined,
-    variants: defaultVariants(),
-    details: {},
-    source: 'tcgdex',
-  }));
-}
-
-function fromDex(c: DexCard): CardPrinting {
-  const v = c.variants ?? {};
-  const variants = [v.holo && 'Holofoil', v.normal && 'Normal', v.reverse && 'Reverse Holofoil', v.firstEdition && '1st Edition'].filter(
-    (x): x is string => !!x,
-  );
-  const details: Record<string, string> = {};
-  if (c.hp) details.HP = String(c.hp);
-  if (c.types?.length) details.Type = c.types.join(' / ');
-  if (c.category) details.Category = c.category;
-  if (c.illustrator) details.Illustrator = c.illustrator;
-  return {
-    game: 'pokemon',
-    key: c.id,
-    name: c.name,
-    setName: c.set.name,
-    setCode: c.set.id,
-    number: `${c.localId}/${c.set.cardCount.official}`,
-    rarity: c.rarity,
-    image: c.image ? `${c.image}/low.webp` : undefined,
-    imageLarge: c.image ? `${c.image}/high.webp` : undefined,
-    variants: variants.length ? variants : defaultVariants(c.rarity),
-    details,
-    source: 'tcgdex',
-  };
-}
-
-async function dexByName(name: string, number?: string): Promise<CardPrinting[]> {
-  const list = await getJson<DexCardBrief[]>(`${TCGDEX}/cards?${qs({ name })}`);
-  const filtered = number ? list.filter((c) => sameCollectorNumber(c.localId, number)) : list;
-  const top = filtered
-    .map((c) => ({ c, s: partialSimilarity(c.name, name) }))
-    .sort((a, b) => b.s - a.s)
-    .slice(0, 16);
-  const cards = await Promise.all(top.map(({ c }) => getJsonOrNull<DexCard>(`${TCGDEX}/cards/${encodeURIComponent(c.id)}`)));
-  return cards.filter((c): c is DexCard => !!c).map(fromDex);
-}
-
-async function dexByNumber(number: string, total: string): Promise<CardPrinting[]> {
-  const sets = await getJson<DexSetBrief[]>(`${TCGDEX}/sets`);
-  const matching = sets.filter((s) => String(s.cardCount.official) === stripLeadingZeros(total)).slice(0, 8);
-  const tries = matching.flatMap((s) => [...new Set([number, stripLeadingZeros(number)])].map((n) => `${TCGDEX}/sets/${s.id}/${encodeURIComponent(n)}`));
-  const cards = await Promise.all(tries.map((u) => getJsonOrNull<DexCard>(u).catch(() => null)));
-  return cards.filter((c): c is DexCard => !!c).map(fromDex);
-}
-
-// ---------------------------------------------------------------------------------------------
 
 function score(card: CardPrinting, hints: ScanHints): number {
   const [num, total] = card.number.split('/');
   const nameText = hints.nameText || hints.name;
+  const setMatch = hints.setCode && normalize(card.setCode) === normalize(hints.setCode);
   return weightedScore([
     [0.5, nameText ? partialSimilarity(card.name, nameText) : undefined],
     [0.35, hints.number ? (sameCollectorNumber(num ?? '', hints.number) ? 1 : 0) : undefined],
-    [0.1, hints.total ? (sameCollectorNumber(total ?? '', hints.total) ? 1 : 0) : undefined],
-    [0.05, hints.setCode ? (normalize(card.setCode) === normalize(hints.setCode) ? 1 : 0) : undefined],
+    // Partial results don't know their set size yet: leave the total out rather than count it wrong.
+    [0.1, hints.total && total !== undefined ? (sameCollectorNumber(total, hints.total) ? 1 : 0) : undefined],
+    [0.05, setMatch ? 1 : undefined],
   ]);
 }
 
-async function lookup(hints: ScanHints): Promise<CardPrinting[]> {
+async function lookupDex(hints: ScanHints): Promise<CardPrinting[]> {
+  const jobs: Array<Promise<CardPrinting[]>> = [];
+  if (hints.number && hints.total && /^\d+$/.test(hints.total)) jobs.push(dexByNumber(hints.number, hints.total));
+  // Search on each plausible name word. OCR often adds a stray letter ("Pikachuz"), and TCGdex
+  // matches substrings, so long words are searched by their first six letters.
+  const words = [...new Set([hints.name ? longestWord(hints.name) : '', ...(hints.nameCandidates ?? [])].filter((w) => w.length >= 4))];
+  for (const w of words.slice(0, 3)) jobs.push(dexByName(w.length > 6 ? w.slice(0, 6) : w, hints.number));
+  const settled = await Promise.allSettled(jobs);
+  const failed = settled.find((r): r is PromiseRejectedResult => r.status === 'rejected');
+  const cards = settled.flatMap((r) => (r.status === 'fulfilled' ? r.value : []));
+  if (!cards.length && failed) throw failed.reason;
+  return cards;
+}
+
+async function lookupPtcg(hints: ScanHints): Promise<CardPrinting[]> {
   const queries: string[] = [];
   if (hints.number) {
     const totalIsPlain = hints.total && /^\d+$/.test(hints.total);
@@ -276,8 +193,6 @@ async function lookup(hints: ScanHints): Promise<CardPrinting[]> {
     if (!totalIsPlain && !hints.name) queries.push(numberClause(hints.number));
   }
   if (hints.name) queries.push(nameClause(hints.name));
-  if (!queries.length) return [];
-
   const results = await Promise.all(
     queries.map((q) =>
       ptcgQuery(q).catch((e: unknown) => {
@@ -286,14 +201,29 @@ async function lookup(hints: ScanHints): Promise<CardPrinting[]> {
       }),
     ),
   );
-  const cards = results.flat().map(fromPtcg);
-  if (cards.length) return cards;
+  return results.flat().map(fromPtcg);
+}
 
-  // Fallback, or nothing found: TCGdex.
-  const out: CardPrinting[] = [];
-  if (hints.number && hints.total && /^\d+$/.test(hints.total)) out.push(...(await dexByNumber(hints.number, hints.total).catch(() => [])));
-  if (hints.name) out.push(...(await dexByName(hints.name, out.length ? undefined : hints.number).catch(() => [])));
-  return out;
+async function lookup(hints: ScanHints): Promise<CardPrinting[]> {
+  try {
+    const cards = await lookupDex(hints);
+    if (cards.length) return cards;
+  } catch (e) {
+    console.warn('TCGdex failed, trying pokemontcg.io', e);
+  }
+  return lookupPtcg(hints);
+}
+
+function longestWord(name: string): string {
+  return name
+    .replace(/["\\:()*]/g, ' ')
+    .split(/\s+/)
+    .sort((a, b) => b.length - a.length)[0] ?? name;
+}
+
+function exactId(card: CardPrinting, hints: ScanHints): boolean {
+  const [num, total] = card.number.split('/');
+  return !!hints.number && !!hints.total && !!num && !!total && sameCollectorNumber(num, hints.number) && sameCollectorNumber(total, hints.total);
 }
 
 export const pokemon: Game = {
@@ -302,9 +232,30 @@ export const pokemon: Game = {
   regions: REGIONS.pokemon,
   parse: parsePokemon,
 
+  score,
+  exactId,
+
   async identify(hints) {
     const cards = await lookup(hints);
     return rank(cards.map((card): Candidate => ({ card, score: score(card, hints) })));
+  },
+
+  async complete(card) {
+    if (!card.partial) return card;
+    return (await dexCard(card.key)) ?? card;
+  },
+
+  async refresh(card) {
+    if (card.source === 'tcgdex') return dexCard(card.key);
+    // Saved from pokemontcg.io: take current prices from the same card in TCGdex (same name,
+    // number and set size), keeping the saved identity so the collection row doesn't move.
+    const [num, total] = card.number.split('/');
+    if (num && total) {
+      const twin = (await dexByNumber(num, total).catch(() => [])).find((c) => partialSimilarity(c.name, card.name) > 0.9);
+      if (twin?.prices) return { ...card, prices: twin.prices, priceSource: twin.priceSource, pricesUpdatedAt: twin.pricesUpdatedAt, variants: twin.variants };
+    }
+    const res = await getJsonOrNull<{ data: PtcgCard }>(`${PTCG}/${encodeURIComponent(card.key)}`).catch(() => null);
+    return res ? fromPtcg(res.data) : null;
   },
 
   async search(query) {
@@ -320,26 +271,14 @@ export const pokemon: Game = {
 
   async sets() {
     try {
-      return await ptcgSets();
+      return await dexSets();
     } catch (e) {
-      console.warn('pokemontcg.io sets failed, using TCGdex', e);
-      return dexSets();
+      console.warn('TCGdex sets failed, using pokemontcg.io', e);
+      return ptcgSets();
     }
   },
 
   setCards(set) {
-    return set.id.startsWith('dex:') ? dexSetCards(set.id.slice(4)) : ptcgSetCards(set.id);
-  },
-
-  async refresh(cards) {
-    // TCGdex has no prices, so only pokemontcg.io cards can be refreshed. 40 ids per query.
-    const out = new Map<string, CardPrinting>();
-    const ids = cards.filter((c) => c.source === 'pokemontcg.io').map((c) => c.key);
-    for (const chunk of chunks(ids, 40)) {
-      const q = `(${chunk.map((id) => `id:"${id}"`).join(' OR ')})`;
-      const res = await getJson<{ data: PtcgCard[] }>(`${PTCG}?${qs({ q, pageSize: 250, select: SELECT })}`, { headers: ptcgHeaders(), timeoutMs: 30000, fresh: true });
-      for (const c of res.data) out.set(c.id, fromPtcg(c));
-    }
-    return out;
+    return set.id.startsWith('ptcg:') ? ptcgSetCards(set.id.slice(5)) : dexSetCards(set.id);
   },
 };

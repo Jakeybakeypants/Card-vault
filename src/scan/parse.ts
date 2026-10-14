@@ -2,8 +2,8 @@ import type { GameId, ScanHints } from '../types';
 import { levenshtein } from '../util/text';
 
 /**
- * A strip of the card to OCR, in fractions of the card's width/height.
- * Bands are generous so a slightly off-centre photo still catches the text.
+ * A strip of the card image to OCR, in fractions of its width/height. Bands are generous: the
+ * image may carry a small margin around the card, or be a slightly off-centre photo.
  */
 export interface Region {
   key: string;
@@ -19,30 +19,30 @@ export const CARD_ASPECT = 63 / 88;
 export const REGIONS: Record<GameId, Region[]> = {
   pokemon: [
     // Stage + name + HP. Name sits top-left, HP top-right.
-    { key: 'name', x: 0.03, y: 0.015, w: 0.94, h: 0.095 },
+    { key: 'name', x: 0.02, y: 0.0, w: 0.96, h: 0.13 },
     // Regulation mark, set code, collector number, illustrator. Modern cards print the number
-    // bottom-left, WotC-era cards bottom-right, so take the full width.
-    { key: 'bottom', x: 0.0, y: 0.87, w: 1.0, h: 0.125 },
+    // bottom-left, older ones bottom-right, so take the full width.
+    { key: 'bottom', x: 0.0, y: 0.83, w: 1.0, h: 0.17 },
   ],
   yugioh: [
     // Name banner, stopping short of the attribute icon.
-    { key: 'name', x: 0.04, y: 0.03, w: 0.8, h: 0.085 },
+    { key: 'name', x: 0.03, y: 0.01, w: 0.82, h: 0.12 },
     // Just under the artwork: set code on the right, "1st Edition" on the left.
-    { key: 'middle', x: 0.0, y: 0.69, w: 1.0, h: 0.095 },
+    { key: 'middle', x: 0.0, y: 0.67, w: 1.0, h: 0.13 },
     // Passcode bottom-left, and the set code on Pendulum cards.
-    { key: 'bottom', x: 0.0, y: 0.86, w: 1.0, h: 0.135 },
+    { key: 'bottom', x: 0.0, y: 0.85, w: 1.0, h: 0.15 },
   ],
   mtg: [
     // Name top-left, stopping before the mana cost.
-    { key: 'name', x: 0.04, y: 0.025, w: 0.72, h: 0.075 },
+    { key: 'name', x: 0.02, y: 0.0, w: 0.76, h: 0.11 },
     // Collector number, rarity, set code and language, bottom-left: "0123 R / M21 • EN".
-    { key: 'bottom', x: 0.0, y: 0.88, w: 1.0, h: 0.12 },
+    { key: 'bottom', x: 0.0, y: 0.86, w: 1.0, h: 0.14 },
   ],
   lorcana: [
     // Name and version sit in the banner across the middle of the card.
-    { key: 'name', x: 0.03, y: 0.5, w: 0.94, h: 0.16 },
+    { key: 'name', x: 0.02, y: 0.48, w: 0.96, h: 0.2 },
     // "12/204 • EN • 1": collector number / set size, language, set number.
-    { key: 'bottom', x: 0.0, y: 0.9, w: 1.0, h: 0.1 },
+    { key: 'bottom', x: 0.0, y: 0.88, w: 1.0, h: 0.12 },
   ],
 };
 
@@ -71,13 +71,16 @@ function fixNumber(s: string): string {
   return toDigits(body) + suffix;
 }
 
+const POKEMON_LANGUAGES = new Set(['EN', 'DE', 'FR', 'IT', 'ES', 'PT', 'JP', 'KR']);
+
 const POKEMON_PROMO_PREFIXES = ['SWSH', 'HGSS', 'SVP', 'SM', 'XY', 'BW', 'DP', 'SV'];
 
 // Words that surround a Pokémon name on the top line and are never part of it.
 const POKEMON_NAME_NOISE = new Set([
   'basic', 'stage', 'stage1', 'stage2', 'stagel', 'hp', 'evolves', 'from', 'put', 'this', 'card', 'on', 'the',
   'restored', 'break', 'level', 'up', 'lv', 'trainer', 'item', 'supporter', 'stadium', 'tool', 'energy',
-  'special', 'pokemon', 'tera', 'ace', 'spec',
+  'special', 'pokemon', 'tera', 'ace', 'spec', 'delta', 'species', 'evolves', 'illus', 'weakness',
+  'resistance', 'retreat',
 ]);
 
 export function parsePokemon(raw: Record<string, string>): ScanHints {
@@ -98,8 +101,12 @@ export function parsePokemon(raw: Record<string, string>): ScanHints {
       /\b([A-Z][A-Z0-9]{1,3})\s+(?:([A-Z]{2})\s+)?$/.exec(before.trimEnd() + ' ') ??
       /\b([A-Z][A-Z0-9]{1,3}?)(EN|DE|FR|IT|ES|PT)\s+$/.exec(before.trimEnd() + ' ');
     if (code && !/^\d+$/.test(code[1]!)) {
-      hints.setCode = code[1];
-      if (code[2]) hints.language = code[2];
+      // "svi EN 063/198" with the set code misread in lowercase: the language is all that's left.
+      if (!code[2] && POKEMON_LANGUAGES.has(code[1]!)) hints.language = code[1];
+      else {
+        hints.setCode = code[1];
+        if (code[2]) hints.language = code[2];
+      }
     }
   } else {
     // Black Star promos: "SWSH050", "SM210", "XY 67".
@@ -116,8 +123,32 @@ export function parsePokemon(raw: Record<string, string>): ScanHints {
   }
 
   hints.nameText = top;
-  hints.name = guessName(top, POKEMON_NAME_NOISE);
+  hints.nameCandidates = nameCandidates(top, POKEMON_NAME_NOISE);
+  hints.name = guessName(top, POKEMON_NAME_NOISE) ?? hints.nameCandidates[0];
   return hints;
+}
+
+/**
+ * Capitalised words that look like a Pokémon name ("Metagross", "Pikachuz" with a stray letter),
+ * most plausible first: words on the line that also carries the HP come first, longer before
+ * shorter. Up to three.
+ */
+export function nameCandidates(text: string, noise: Set<string>): string[] {
+  const scored: Array<{ w: string; s: number }> = [];
+  for (const line of text.split('\n')) {
+    const hpLine = /\bHP\b|\d{2,3}\s*HP|HP\s*\d{2,3}/i.test(line);
+    for (const m of line.matchAll(/[A-Z][a-z]{3,}[a-z'.-]*/g)) {
+      const w = m[0].replace(/[.'-]+$/, '');
+      if (noise.has(w.toLowerCase())) continue;
+      scored.push({ w, s: (hpLine ? 10 : 0) + w.length });
+    }
+  }
+  const seen = new Set<string>();
+  return scored
+    .sort((a, b) => b.s - a.s)
+    .map((x) => x.w)
+    .filter((w) => !seen.has(w.toLowerCase()) && !!seen.add(w.toLowerCase()))
+    .slice(0, 3);
 }
 
 // Region letters in Yu-Gi-Oh! set codes → card language.

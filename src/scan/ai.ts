@@ -27,7 +27,13 @@ const SCHEMA = {
     passcode: { type: 'string', description: 'Yu-Gi-Oh!: the 8-digit number bottom-left. Empty for other games.' },
     variant: {
       type: 'string',
-      description: 'Visible finish or edition: "1st Edition", "Limited Edition", "Holofoil", "Reverse Holofoil", or "" if it cannot be told.',
+      enum: ['Normal', 'Holofoil', 'Reverse Holofoil', '1st Edition', '1st Edition Holofoil', 'Unlimited', 'Limited Edition', 'Foil', 'Etched Foil', ''],
+      description:
+        'The finish. Pokémon: "Holofoil" when only the artwork is shiny/rainbow foil (full arts and ex/V cards are foil all over), ' +
+        '"Reverse Holofoil" when the card body and text box are foil but the artwork is not, "Normal" when nothing is foil; ' +
+        'prefix "1st Edition" if the 1st Edition stamp is printed left of the artwork. Yu-Gi-Oh!: "1st Edition" or "Limited Edition" ' +
+        'when printed under the artwork, else "Unlimited". Magic / Lorcana: "Foil" when the card is foil (Magic "Etched Foil" for etched), else "Normal". ' +
+        'Use "" only if the photo does not show it.',
     },
     language: { type: 'string', description: 'Two-letter language code of the card text, e.g. "EN", "JP", "DE".' },
   },
@@ -93,6 +99,7 @@ export async function readCardWithClaude(canvas: HTMLCanvasElement, apiKey: stri
     name: blank(card.name),
     nameText: blank(card.name),
     variant: blank(card.variant),
+    variantConfidence: blank(card.variant) ? 0.8 : undefined,
     language: blank(card.language)?.toUpperCase(),
     raw: { claude: text.text },
   };

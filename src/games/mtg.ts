@@ -2,7 +2,7 @@ import { parseMtg, REGIONS } from '../scan/parse';
 import type { Candidate, CardPrinting, CardSet, ScanHints } from '../types';
 import { normalize, partialSimilarity, sameCollectorNumber } from '../util/text';
 import { rank, weightedScore, type Game } from './game';
-import { getJson, getJsonOrNull, pool, qs } from './http';
+import { getJson, getJsonOrNull, qs } from './http';
 
 // Scryfall: free and keyless (please keep it under ~10 requests/second). https://scryfall.com/docs/api
 const API = 'https://api.scryfall.com';
@@ -91,6 +91,8 @@ export function fromScryfall(c: SfCard): CardPrinting {
     image: img?.normal,
     imageLarge: img?.large,
     prices: Object.keys(prices).length ? prices : undefined,
+    priceSource: Object.keys(prices).length ? 'TCGplayer (via Scryfall)' : undefined,
+    pricesUpdatedAt: Object.keys(prices).length ? new Date().toISOString() : undefined,
     variants: variants.length ? variants : ['Normal'],
     releaseDate: c.released_at,
     url: c.purchase_uris?.tcgplayer ?? c.scryfall_uri,
@@ -99,8 +101,8 @@ export function fromScryfall(c: SfCard): CardPrinting {
   };
 }
 
-async function bySetNumber(set: string, number: string, fresh = false): Promise<CardPrinting[]> {
-  const c = await getJsonOrNull<SfCard>(`${API}/cards/${encodeURIComponent(set.toLowerCase())}/${encodeURIComponent(number)}`, { fresh });
+async function bySetNumber(set: string, number: string): Promise<CardPrinting[]> {
+  const c = await getJsonOrNull<SfCard>(`${API}/cards/${encodeURIComponent(set.toLowerCase())}/${encodeURIComponent(number)}`);
   return c ? [fromScryfall(c)] : [];
 }
 
@@ -130,6 +132,13 @@ export const mtg: Game = {
   name: 'Magic',
   regions: REGIONS.mtg,
   parse: parseMtg,
+
+  score,
+  exactId: (card, hints) => !!hints.setCode && !!hints.number && normalize(card.setCode) === normalize(hints.setCode) && sameCollectorNumber(card.number, hints.number),
+
+  async complete(card) {
+    return card;
+  },
 
   async identify(hints) {
     const jobs: Array<Promise<CardPrinting[]>> = [];
@@ -184,13 +193,8 @@ export const mtg: Game = {
     return out.map(fromScryfall);
   },
 
-  async refresh(cards) {
-    // One request per card, four at a time, well inside Scryfall's 10/second.
-    const out = new Map<string, CardPrinting>();
-    await pool(cards, 4, async (c) => {
-      const [hit] = await bySetNumber(c.setCode, c.number, true).catch(() => []);
-      if (hit) out.set(hit.key, hit);
-    });
-    return out;
+  async refresh(card) {
+    const [hit] = await bySetNumber(card.setCode, card.number);
+    return hit ?? null;
   },
 };

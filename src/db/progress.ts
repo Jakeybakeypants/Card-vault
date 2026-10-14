@@ -28,7 +28,7 @@ export function slotsFor(cards: CardPrinting[]): SetSlot[] {
   return [...byId.values()].sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
 }
 
-/** pokemontcg.io keys are `<setId>-<number>`; TCGdex keys are `<setId>-<localId>`. */
+/** TCGdex keys are `<setId>-<localId>`; pokemontcg.io keys are `<setId>-<number>`. */
 function keySet(key: string): string {
   return key.slice(0, key.lastIndexOf('-'));
 }
@@ -37,11 +37,12 @@ export function entryInSet(e: CollectionEntry, set: CardSet): boolean {
   if (e.card.game !== set.game) return false;
   if (set.game === 'yugioh') return e.card.setName === set.name;
   if (set.game !== 'pokemon') return e.card.setCode.toUpperCase() === set.code.toUpperCase();
-  const setId = set.id.replace(/^dex:/, '');
-  if (keySet(e.card.key) === setId) return true;
-  // Entries from the other Pokémon catalog have different ids; fall back to the set name.
-  const sameSource = set.id.startsWith('dex:') === (e.card.source === 'tcgdex');
-  return !sameSource && e.card.setName === set.name;
+  // Binder sets come from TCGdex, or from pokemontcg.io (`ptcg:` ids) when TCGdex is down.
+  const fromPtcg = set.id.startsWith('ptcg:');
+  const sameSource = fromPtcg === (e.card.source === 'pokemontcg.io');
+  if (sameSource) return keySet(e.card.key) === set.id.replace(/^ptcg:/, '');
+  // Saved from the other catalog: the ids differ, so go by the set name.
+  return e.card.setName === set.name;
 }
 
 /** The collection's entries for one set, grouped by slot. */

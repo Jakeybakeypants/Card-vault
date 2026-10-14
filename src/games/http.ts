@@ -9,19 +9,12 @@ export class HttpError extends Error {
 
 const cache = new Map<string, Promise<unknown>>();
 
-export interface GetInit {
-  headers?: Record<string, string>;
-  timeoutMs?: number;
-  /** Skip the session cache (price refreshes). The fresh response replaces the cached one. */
-  fresh?: boolean;
-}
-
 /**
  * GET a JSON document with a timeout. Successful responses are memoised for the session so
  * re-scanning the same card, or flicking between candidates, costs no extra requests.
  */
-export function getJson<T>(url: string, init: GetInit = {}): Promise<T> {
-  const hit = init.fresh ? undefined : cache.get(url);
+export function getJson<T>(url: string, init: { headers?: Record<string, string>; timeoutMs?: number } = {}): Promise<T> {
+  const hit = cache.get(url);
   if (hit) return hit as Promise<T>;
   const p = (async () => {
     const ctrl = new AbortController();
@@ -40,7 +33,7 @@ export function getJson<T>(url: string, init: GetInit = {}): Promise<T> {
 }
 
 /** Like getJson, but "no such card" (400/404) resolves to null instead of throwing. */
-export async function getJsonOrNull<T>(url: string, init?: GetInit): Promise<T | null> {
+export async function getJsonOrNull<T>(url: string, init?: { headers?: Record<string, string>; timeoutMs?: number }): Promise<T | null> {
   try {
     return await getJson<T>(url, init);
   } catch (e) {
@@ -53,12 +46,6 @@ export function qs(params: Record<string, string | number | undefined>): string 
   const u = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== '') u.set(k, String(v));
   return u.toString();
-}
-
-export function chunks<T>(items: T[], size: number): T[][] {
-  const out: T[][] = [];
-  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
-  return out;
 }
 
 /** Run jobs a few at a time, to stay polite to the APIs. */
