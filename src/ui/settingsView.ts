@@ -1,4 +1,5 @@
 import { clearCollection } from '../db/store';
+import { onScanLog, scanLog, shareScanReport } from '../scan/scanLog';
 import { CONDITION_LABELS, CONDITIONS, type Condition } from '../types';
 import { settings, updateSettings, type Settings } from '../util/settings';
 import { h, LANGUAGES, select } from './dom';
@@ -32,6 +33,15 @@ function secret(key: 'anthropicApiKey' | 'pokemonTcgApiKey', label: string, hint
 }
 
 export function settingsView(): View {
+  const reportButton = h('button', { type: 'button', class: 'wide', onclick: () => void shareScanReport() });
+  const renderReport = (): void => {
+    const n = scanLog().length;
+    reportButton.textContent = n ? `Share scan report (${n} ${n === 1 ? 'scan' : 'scans'})` : 'No scans yet this session';
+    reportButton.disabled = !n;
+  };
+  onScanLog(renderReport);
+  renderReport();
+
   const el = h(
     'section',
     { class: 'view settings-view' },
@@ -70,6 +80,14 @@ export function settingsView(): View {
       { class: 'muted small' },
       'Pokémon data and prices: TCGdex (TCGplayer market prices), with pokemontcg.io as a fallback. Yu-Gi-Oh! data and prices: YGOPRODeck. Magic: Scryfall. Lorcana: Lorcast. Your collection is stored on this device only. Use Back up on the Collection tab to keep a copy.',
     ),
+
+    h('h2', null, 'Scan reports'),
+    h(
+      'p',
+      { class: 'muted small' },
+      'The app remembers your last 20 scans while it’s open: the photo of the card, what it read and what it matched. If cards are misread or missed, share the report and send it to whoever maintains the app. Nothing is sent unless you share it.',
+    ),
+    reportButton,
 
     h('h2', null, 'Danger zone'),
     h(

@@ -1,5 +1,6 @@
 import type { CardPrinting, CardSet } from '../types';
-import { sameCollectorNumber, stripLeadingZeros } from '../util/text';
+import { candidateSets, localIdForms, localIdIn, pokemonSet, totalDigits } from './pokemonSetIndex';
+import { sameCollectorNumber } from '../util/text';
 import { getJson, getJsonOrNull, qs } from './http';
 
 // TCGdex (https://tcgdex.dev): free, keyless, open-source Pokémon catalog. Each full card record
@@ -21,6 +22,17 @@ interface DexTcgplayerPrinting {
   lowPrice?: number | null;
 }
 
+type DexTcgplayer = ({ updated?: string | null; unit?: string | null } & Record<string, unknown>) | null;
+
+/** One printing of the card (finish, stamp, special foil) with its own marketplace ids and prices. */
+interface DexVariantDetailed {
+  type?: string;
+  stamp?: string[];
+  foil?: string;
+  thirdParty?: { tcgplayer?: number; cardmarket?: number };
+  pricing?: { tcgplayer?: DexTcgplayer; cardmarket?: DexCardmarket | null } | null;
+}
+
 export interface DexCard extends DexBrief {
   rarity?: string;
   category?: string;
@@ -30,10 +42,26 @@ export interface DexCard extends DexBrief {
   stage?: string;
   variants?: { normal?: boolean; holo?: boolean; reverse?: boolean; firstEdition?: boolean };
   set: { id: string; name: string; cardCount?: { official?: number; total?: number } };
+  variants_detailed?: DexVariantDetailed[];
   /** Not in the official SDK types, but present on full card records. */
   pricing?: {
-    tcgplayer?: ({ updated?: string | null; unit?: string | null } & Record<string, unknown>) | null;
+    tcgplayer?: DexTcgplayer;
+    cardmarket?: DexCardmarket | null;
   } | null;
+}
+
+/** Cardmarket's price guide for the card, in EUR. The `-holo` fields are the reverse holo. */
+export interface DexCardmarket {
+  updated?: string;
+  unit?: string;
+  avg?: number;
+  low?: number;
+  trend?: number;
+  avg30?: number;
+  'avg-holo'?: number;
+  'low-holo'?: number;
+  'trend-holo'?: number;
+  'avg30-holo'?: number;
 }
 
 interface DexSetBrief {
@@ -55,20 +83,36 @@ const PRICE_LABELS: Record<string, string> = {
   'unlimited-holofoil': 'Unlimited Holofoil',
 };
 
+/** Plain finishes only: stamped (prerelease, staff…) and special-foil printings sell for different prices. */
+function plainVariants(card: DexCard): DexVariantDetailed[] {
+  return (card.variants_detailed ?? []).filter((v) => !v.stamp?.length && !v.foil);
+}
+
+/**
+ * TCGplayer market price per finish. The card-level prices cover one TCGplayer product; finishes
+ * sold as separate products carry their own under `variants_detailed`, so those fill the gaps.
+ */
 export function dexPrices(card: DexCard): { prices: Record<string, number>; productId?: number; updated?: string } {
-  const tp = card.pricing?.tcgplayer;
   const prices: Record<string, number> = {};
   let productId: number | undefined;
-  if (!tp) return { prices };
-  for (const [key, value] of Object.entries(tp)) {
-    if (key === 'updated' || key === 'unit' || !value || typeof value !== 'object') continue;
-    const p = value as DexTcgplayerPrinting;
-    const v = [p.marketPrice, p.midPrice, p.lowPrice].find((x): x is number => typeof x === 'number' && x > 0);
-    if (v === undefined) continue;
-    prices[PRICE_LABELS[key] ?? key] = v;
-    productId ??= p.productId ?? undefined;
+  let updated: string | undefined;
+  const sources = [card.pricing?.tcgplayer, ...plainVariants(card).map((v) => v.pricing?.tcgplayer)];
+  for (const tp of sources) {
+    if (!tp) continue;
+    updated ??= tp.updated ?? undefined;
+    for (const [key, value] of Object.entries(tp)) {
+      if (key === 'updated' || key === 'unit' || !value || typeof value !== 'object') continue;
+      const p = value as DexTcgplayerPrinting;
+      const v = [p.marketPrice, p.midPrice, p.lowPrice].find((x): x is number => typeof x === 'number' && x > 0);
+      const label = PRICE_LABELS[key] ?? key;
+      if (v === undefined || label in prices) continue;
+      prices[label] = v;
+      productId ??= p.productId ?? undefined;
+    }
   }
-  return { prices, productId, updated: tp.updated ?? undefined };
+  // No prices (a gallery TCGdex doesn't price), but the product is known: still link to it.
+  productId ??= plainVariants(card).find((v) => v.thirdParty?.tcgplayer)?.thirdParty?.tcgplayer;
+  return { prices, productId, updated };
 }
 
 /**
@@ -89,9 +133,15 @@ export function dexVariants(card: DexCard, priced: string[]): string[] {
   return out.length ? out : ['Normal', 'Holofoil', 'Reverse Holofoil'];
 }
 
-function setIdOf(cardId: string): string {
+export function setIdOf(cardId: string): string {
   const i = cardId.lastIndexOf('-');
   return i > 0 ? cardId.slice(0, i) : cardId;
+}
+
+/** Set name, printed code and release date for a card id, from the generated set table. */
+function setFacts(setId: string): { name?: string; code?: string; releaseDate?: string; official?: number } {
+  const s = pokemonSet(setId);
+  return s ? { name: s.name, code: s.code ? s.code.split(':')[0] : undefined, releaseDate: s.releaseDate, official: s.official || undefined } : {};
 }
 
 export function fromDex(c: DexCard): CardPrinting {
@@ -102,13 +152,14 @@ export function fromDex(c: DexCard): CardPrinting {
   if (c.types?.length) details.Type = c.types.join(' / ');
   details.Category = [c.category, c.stage].filter(Boolean).join(' · ');
   if (c.illustrator) details.Illustrator = c.illustrator;
-  const official = c.set.cardCount?.official;
+  const facts = setFacts(c.set.id);
+  const official = c.set.cardCount?.official || facts.official;
   return {
     game: 'pokemon',
     key: c.id,
     name: c.name,
     setName: c.set.name,
-    setCode: c.set.id,
+    setCode: facts.code ?? c.set.id,
     number: official ? `${c.localId}/${official}` : c.localId,
     rarity: c.rarity,
     image: c.image ? `${c.image}/low.webp` : undefined,
@@ -118,6 +169,7 @@ export function fromDex(c: DexCard): CardPrinting {
     // When we fetched them: drives the daily refresh. TCGdex's own `updated` can be days old.
     pricesUpdatedAt: priced.length ? new Date().toISOString() : undefined,
     variants: dexVariants(c, priced),
+    releaseDate: facts.releaseDate,
     url: productId ? `https://www.tcgplayer.com/product/${productId}` : `https://www.tcgdex.net/database/${setIdOf(c.id)}/${c.localId}`,
     details,
     source: 'tcgdex',
@@ -126,57 +178,88 @@ export function fromDex(c: DexCard): CardPrinting {
 
 /** Enough to rank by name/number and compare pictures; `completeDex` fetches the rest. */
 export function partialFromBrief(b: DexBrief): CardPrinting {
+  const setId = setIdOf(b.id);
+  const facts = setFacts(setId);
   return {
     game: 'pokemon',
     key: b.id,
     name: b.name,
-    setName: setIdOf(b.id),
-    setCode: setIdOf(b.id),
-    number: b.localId,
+    setName: facts.name ?? setId,
+    setCode: facts.code ?? setId,
+    number: facts.official ? `${b.localId}/${facts.official}` : b.localId,
     image: b.image ? `${b.image}/low.webp` : undefined,
     imageLarge: b.image ? `${b.image}/high.webp` : undefined,
     variants: [],
+    releaseDate: facts.releaseDate,
     details: {},
     source: 'tcgdex',
     partial: true,
   };
 }
 
-export async function dexCard(id: string): Promise<CardPrinting | null> {
+/** A full card plus its Cardmarket prices (EUR), which `fromDex` leaves out. */
+export async function dexCardWithMarket(id: string): Promise<{ card: CardPrinting; cardmarket?: DexCardmarket } | null> {
   const c = await getJsonOrNull<DexCard>(`${API}/cards/${encodeURIComponent(id)}`);
-  return c ? fromDex(c) : null;
+  return c ? { card: fromDex(c), cardmarket: c.pricing?.cardmarket ?? plainVariants(c).find((v) => v.pricing?.cardmarket)?.pricing?.cardmarket ?? undefined } : null;
 }
 
 // TCG Pocket (the mobile game) shares the catalog; its sets are never physical cards.
 const isPocketSet = (id: string): boolean => /^(A\d|B\d|P-A)/i.test(id);
 
-/** "063" and "198": every set with 198 numbered cards, then that number in each. */
-export async function dexByNumber(number: string, total: string): Promise<CardPrinting[]> {
-  const sets = await getJson<DexSetBrief[]>(`${API}/sets`);
-  const matching = sets.filter((s) => !isPocketSet(s.id) && String(s.cardCount?.official) === stripLeadingZeros(total)).slice(0, 10);
-  const bare = stripLeadingZeros(number);
-  // Older sets store "4", Scarlet & Violet stores "063": try the spellings that could exist.
-  const forms = [...new Set([number, bare, /^\d+$/.test(bare) ? bare.padStart(3, '0') : bare])];
-  const found = await Promise.all(
-    matching.flatMap((s) => forms.map((n) => getJsonOrNull<DexCard>(`${API}/sets/${encodeURIComponent(s.id)}/${encodeURIComponent(n)}`).catch(() => null))),
-  );
+async function liveSets(): Promise<DexSetBrief[]> {
+  return getJson<DexSetBrief[]>(`${API}/sets`);
+}
+
+/** One printed number in one set, or null. Known sets need one request; new ones try spellings. */
+async function inSet(setId: string, number: string): Promise<DexCard | null> {
+  const known = pokemonSet(setId);
+  const forms = known ? [localIdIn(known, number)] : localIdForms(number);
+  for (const n of forms) {
+    const c = await getJsonOrNull<DexCard>(`${API}/sets/${encodeURIComponent(setId)}/${encodeURIComponent(n)}`).catch(() => null);
+    if (c) return c;
+  }
+  return null;
+}
+
+/**
+ * A printed collector number: "063" + "198" (+ "SVI"), "TG05" + "TG30", "SV001" + "SV122".
+ * The set code, when read, names the set; otherwise every set of that size is tried, newest
+ * first, including sets released after the generated table.
+ */
+export async function dexByNumber(number: string, total: string | undefined, setCode?: string, setName?: string): Promise<CardPrinting[]> {
+  const ids = [...candidateSets({ number, total, setCode, setName }), ...(setCode ? candidateSets({ number, total, setName }) : [])].map((s) => s.id);
+  const size = totalDigits(total);
+  if (size) {
+    const live = await liveSets().catch(() => [] as DexSetBrief[]);
+    for (const s of [...live].reverse()) {
+      if (!pokemonSet(s.id) && !isPocketSet(s.id) && String(s.cardCount?.official) === size) ids.push(s.id);
+    }
+  }
+  const tries = [...new Set(ids)].slice(0, 8);
+  const found = await Promise.all(tries.map((id) => inSet(id, number)));
   const seen = new Set<string>();
   return found.filter((c): c is DexCard => !!c && !seen.has(c.id) && !!seen.add(c.id)).map(fromDex);
 }
 
+/** A Black Star promo: "SWSH050" → swshp/SWSH050, "085" with SVP read beside it → svp/085. */
+export async function dexPromo(setId: string, number: string): Promise<CardPrinting[]> {
+  const c = await inSet(setId, number);
+  return c ? [fromDex(c)] : [];
+}
+
 /**
- * Every card whose name contains `name`, as partial results: one request for the cards plus the
- * (cached) set list, which gives each result its set name and size.
+ * Every card whose name contains `name`, as partial results. Set names, sizes and dates come
+ * from the generated table; the live set list fills in sets newer than it.
  */
 export async function dexByName(name: string, number?: string): Promise<CardPrinting[]> {
-  const [list, sets] = await Promise.all([getJson<DexBrief[]>(`${API}/cards?${qs({ name })}`), getJson<DexSetBrief[]>(`${API}/sets`).catch(() => [])]);
+  const [list, sets] = await Promise.all([getJson<DexBrief[]>(`${API}/cards?${qs({ name })}`), liveSets().catch(() => [] as DexSetBrief[])]);
   const setById = new Map(sets.map((s) => [s.id, s]));
   const physical = list.filter((b) => !isPocketSet(setIdOf(b.id)));
   const withNumber = number ? physical.filter((b) => sameCollectorNumber(b.localId, number)) : [];
   return (withNumber.length ? withNumber : physical).map((b) => {
     const card = partialFromBrief(b);
-    const set = setById.get(card.setCode);
-    if (set) {
+    const set = setById.get(setIdOf(b.id));
+    if (set && !pokemonSet(set.id)) {
       card.setName = set.name;
       if (set.cardCount?.official) card.number = `${b.localId}/${set.cardCount.official}`;
     }
@@ -190,7 +273,21 @@ export async function dexSets(): Promise<CardSet[]> {
   return list
     .filter((s) => !isPocketSet(s.id) && s.cardCount?.total > 0)
     .reverse()
-    .map((s) => ({ game: 'pokemon', id: s.id, name: s.name, code: s.id.toUpperCase(), total: s.cardCount.total, logo: s.logo ? `${s.logo}.webp` : undefined }));
+    .map((s): CardSet => {
+      const known = pokemonSet(s.id);
+      return {
+        game: 'pokemon',
+        id: s.id,
+        name: s.name,
+        code: known?.code || s.id.toUpperCase(),
+        total: s.cardCount.total,
+        releaseDate: known?.releaseDate,
+        series: known?.series,
+        logo: s.logo ? `${s.logo}.webp` : undefined,
+      };
+    })
+    // Newest first; sets newer than the generated table have no date and lead the list.
+    .sort((a, b) => (b.releaseDate ?? '9999').localeCompare(a.releaseDate ?? '9999'));
 }
 
 /** Every card in a set, as partial results (completed when one is opened or added). */

@@ -312,3 +312,107 @@ describe('lorcana', () => {
     expect((await lorcana.refresh(res[0]!.card))?.key).toBe('1-115');
   });
 });
+
+describe('special Pokémon cards', () => {
+  const dex = (id: string, localId: string, name: string, set: { id: string; name: string; official: number }, pricing: unknown = null) => ({
+    id,
+    localId,
+    name,
+    image: `https://assets.example/${id}`,
+    rarity: 'Holo Rare',
+    category: 'Pokemon',
+    variants: { holo: true },
+    set: { id: set.id, name: set.name, cardCount: { official: set.official, total: set.official } },
+    pricing,
+  });
+
+  it('finds an SVP promo from "SVP EN 085" without the name', async () => {
+    const { parsePokemon } = await import('../scan/parse');
+    const seen = stubFetch([[/sets\/svp\/085$/, dex('svp-085', '085', 'Pikachu', { id: 'svp', name: 'SVP Black Star Promos', official: 225 })]]);
+    const hints = parsePokemon({ name: '', bottom: 'G SVP EN 085' });
+    expect(hints).toMatchObject({ number: '085', setCode: 'SVP', language: 'EN' });
+    const res = await pokemon.identify(hints);
+    expect(res[0]!.card.key).toBe('svp-085');
+    expect(pokemon.exactId(res[0]!.card, hints)).toBe(true);
+    expect(seen.filter((u) => u.includes('tcgdex'))).toHaveLength(1);
+  });
+
+  it('looks up a Trainer Gallery number in the gallery sets, and the set code picks one', async () => {
+    const tg = { id: 'swsh9tg', name: 'Brilliant Stars Trainer Gallery', official: 30 };
+    const seen = stubFetch([[/sets\/swsh9tg\/TG05$/, dex('swsh9tg-TG05', 'TG05', 'Zekrom', tg)]]);
+    const res = await pokemon.identify({ number: 'TG05', total: 'TG30' });
+    expect(res[0]!.card).toMatchObject({ key: 'swsh9tg-TG05', number: 'TG05/30', setCode: 'BRS' });
+    // All four Trainer Galleries are TG30; without a set code each one is asked.
+    expect(seen.filter((u) => /sets\/swsh\d+tg\/TG05$/.test(u))).toHaveLength(4);
+    expect(pokemon.exactId(res[0]!.card, { number: 'TG05', total: 'TG30' })).toBe(true);
+  });
+
+  it('names the set from the printed code instead of every set of that size', async () => {
+    const sv1 = { id: 'sv01', name: 'Scarlet & Violet', official: 198 };
+    const seen = stubFetch([[/sets\/sv01\/201$/, dex('sv01-201', '201', 'Spidops ex', sv1)]]);
+    const res = await pokemon.identify({ number: '201', total: '198', setCode: 'SVI' });
+    expect(res[0]!.card).toMatchObject({ key: 'sv01-201', setCode: 'SVI', releaseDate: '2023-03-31' });
+    // The coded set is asked first.
+    expect(seen.find((u) => /\/sets\/[^/]+\/201$/.test(u))).toMatch(/sets\/sv01\/201$/);
+  });
+
+  it('ranks the set the code names above same-name, same-number cards elsewhere', async () => {
+    stubFetch([
+      [/sets\/svp\/027$/, dex('svp-027', '027', 'Pikachu', { id: 'svp', name: 'SVP Black Star Promos', official: 225 })],
+      [/cards\?name=Pikach/, [{ id: 'swsh10.5-027', localId: '027', name: 'Pikachu' }, { id: 'svp-027', localId: '027', name: 'Pikachu' }]],
+    ]);
+    const res = await pokemon.identify({ number: '027', setCode: 'SVP', name: 'Pikachu', nameText: 'BASIC Pikachu HP 60' });
+    expect(res[0]!.card.key).toBe('svp-027');
+    expect(res[0]!.score).toBeGreaterThan(res[1]!.score);
+  });
+
+  it('prices a gallery card TCGdex has no TCGplayer price for from pokemontcg.io', async () => {
+    const tg = { id: 'swsh9tg', name: 'Brilliant Stars Trainer Gallery', official: 30 };
+    stubFetch([
+      [/tcgdex\.net\/v2\/en\/cards\/swsh9tg-TG05$/, dex('swsh9tg-TG05', 'TG05', 'Zekrom', tg, { tcgplayer: null, cardmarket: { trend: 2 } })],
+      [/pokemontcg\.io.*number:TG05/, { data: [{ ...ptcgCard('swsh9tg-TG05', 'Zekrom', 'TG05', 'swsh9tg', 30), set: { id: 'swsh9tg', name: 'Brilliant Stars Trainer Gallery', series: 'Sword & Shield', printedTotal: 30, total: 30, releaseDate: '2022/02/25' }, tcgplayer: { url: 'https://tcgplayer.example/zekrom', prices: { holofoil: { market: 3.5, mid: 4 } } } }] }],
+    ]);
+    const card = await pokemon.complete({ ...(await pokemon.identify({ number: 'TG05', total: 'TG30' }).then((r) => r[0]!.card)), prices: undefined });
+    expect(card.prices).toEqual({ Holofoil: 3.5 });
+    expect(card.priceSource).toMatch(/pokemontcg\.io/);
+  });
+
+  it('falls back to Cardmarket in USD when pokemontcg.io has nothing', async () => {
+    const tg = { id: 'swsh9tg', name: 'Brilliant Stars Trainer Gallery', official: 30 };
+    stubFetch([
+      [/tcgdex\.net\/v2\/en\/cards\/swsh9tg-TG05$/, dex('swsh9tg-TG05', 'TG05', 'Zekrom', tg, { tcgplayer: null, cardmarket: { trend: 2, 'trend-holo': 5 } })],
+      [/frankfurter/, { rates: { USD: 1.1 } }],
+    ]);
+    const full = await pokemon.complete({ key: 'swsh9tg-TG05', game: 'pokemon', name: 'Zekrom', setName: 'x', setCode: 'x', number: 'TG05', variants: [], details: {}, source: 'tcgdex', partial: true });
+    expect(full.prices).toEqual({ Holofoil: 2.2 });
+    expect(full.priceSource).toMatch(/Cardmarket/);
+  });
+});
+
+describe('TCGdex per-finish products', () => {
+  it('merges finishes sold as separate TCGplayer products, ignoring stamped printings', async () => {
+    const { fromDex } = await import('./tcgdex');
+    const card = fromDex({
+      id: 'x-1',
+      localId: '1',
+      name: 'X',
+      variants: { normal: true, reverse: true },
+      set: { id: 'x', name: 'X', cardCount: { official: 10, total: 10 } },
+      pricing: { tcgplayer: { unit: 'USD', normal: { productId: 11, marketPrice: 0.5 } } },
+      variants_detailed: [
+        { type: 'normal', thirdParty: { tcgplayer: 11 }, pricing: { tcgplayer: { normal: { productId: 11, marketPrice: 0.5 } } } },
+        { type: 'reverse', thirdParty: { tcgplayer: 12 }, pricing: { tcgplayer: { 'reverse-holofoil': { productId: 12, marketPrice: 2 } } } },
+        { type: 'normal', stamp: ['pre-release'], thirdParty: { tcgplayer: 13 }, pricing: { tcgplayer: { holofoil: { productId: 13, marketPrice: 40 } } } },
+      ],
+    });
+    expect(card.prices).toEqual({ Normal: 0.5, 'Reverse Holofoil': 2 });
+    expect(card.url).toBe('https://www.tcgplayer.com/product/11');
+  });
+
+  it('links to the TCGplayer product even when TCGdex has no price for it', async () => {
+    const { fromDex } = await import('./tcgdex');
+    const card = fromDex({ id: 'swsh9tg-TG05', localId: 'TG05', name: 'Zekrom', variants: { holo: true }, set: { id: 'swsh9tg', name: 'BRS TG', cardCount: { official: 30, total: 30 } }, pricing: { tcgplayer: null }, variants_detailed: [{ type: 'holo', thirdParty: { tcgplayer: 262345 } }] });
+    expect(card.prices).toBeUndefined();
+    expect(card.url).toBe('https://www.tcgplayer.com/product/262345');
+  });
+});

@@ -92,8 +92,21 @@ All are free and need no key. Saved cards' prices refresh automatically once a d
 the Collection tab, or on demand with **Update prices**. Prices are TCGplayer market prices for
 one ungraded copy. Yu-Gi-Oh! prices don't distinguish 1st Edition from Unlimited, because the
 source doesn't.
+
+TCGdex has no TCGplayer price for the Pokémon subsets TCGplayer files as separate groups
+(Trainer Gallery, Galarian Gallery, Shiny Vault, Classic Collection, Radiant Collection and a
+few others). For those the app takes the same card's TCGplayer price from pokemontcg.io, and
+failing that Cardmarket's trend price converted from EUR at the day's rate. The card's detail
+sheet says which source a price came from.
 Card images are cached in the browser when you add a card, so the collection works offline and
 doesn't keep re-downloading images from the catalogs.
+
+## Scan reports
+
+If cards are misread or missed, **Settings → Share scan report** (or the button under "What the
+scanner saw") saves the last 20 scans as one file: the photo of each card, what OCR read, the
+matches and what happened next (added, picked another match, searched instead). Nothing leaves
+the phone unless you share it. It's the quickest way to get a misread fixed.
 
 ## Your data
 
@@ -117,6 +130,8 @@ Collection tab you can:
 | AI reader | `src/scan/ai.ts` |
 | Scan → candidates | `src/scan/recognize.ts` |
 | Catalogs | `src/games/tcgdex.ts`, `pokemon.ts`, `yugioh.ts`, `mtg.ts`, `lorcana.ts`, ranking in `src/games/game.ts` |
+| Pokémon set table (codes, sizes, dates) | `src/games/pokemonSets.ts` (generated), `src/games/pokemonSetIndex.ts` |
+| Scan reports | `src/scan/scanLog.ts` |
 | Set completion (binder) | `src/db/progress.ts` (pure, unit-tested), `src/ui/binderView.ts` |
 | Collection DB, export, price refresh | `src/db/store.ts`, `src/db/exchange.ts`, `src/db/prices.ts` |
 | UI | `src/ui/*` (no framework), `src/style.css` |
@@ -125,6 +140,21 @@ Adding another game (One Piece, Flesh and Blood…) means one new file in `src/g
 implements the `Game` interface (OCR regions, a parser, catalog lookup/search, sets for the
 binder), plus its entry in `src/games/index.ts` and its artwork / text-box regions in
 `src/scan/vision.ts`.
+
+## Checking Pokémon lookups against the whole catalog
+
+`scripts/pokemon-eval.test.ts` replays the text printed on thousands of real cards (every kind:
+secret rares, Trainer/Galarian Gallery, Shiny Vault, promos) through the parser and lookup
+against a local copy of the TCGdex catalog, and reports how often the right printing comes out
+on top, with the name and number read, the number only, or the name only. The same checkout
+regenerates the set table:
+
+```bash
+git clone --depth 1 --filter=blob:none --sparse https://github.com/tcgdex/cards-database ../cards-database
+(cd ../cards-database && git sparse-checkout set --no-cone '/data/*/*.ts' '/data/Scarlet & Violet/' '/data/Mega Evolution/' '/data/Sword & Shield/' '/data/Sun & Moon/')
+node scripts/gen-pokemon-sets.mjs ../cards-database
+TCGDEX_DIR=../cards-database EVAL_OUT=eval.txt npx vitest run scripts/pokemon-eval.test.ts
+```
 
 ## Roadmap
 

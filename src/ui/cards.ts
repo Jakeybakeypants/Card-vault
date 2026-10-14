@@ -1,6 +1,7 @@
 import { ALL_VARIANTS, GAMES } from '../games';
 import { addCard, deleteEntry, entryValue, imageUrl, unitPrice, updateEntry } from '../db/store';
 import { guessFinish, type Recognition } from '../scan/recognize';
+import { shareScanReport } from '../scan/scanLog';
 import { learnFinish } from '../scan/vision';
 import { CONDITION_LABELS, CONDITIONS, type CardPrinting, type CollectionEntry, type Condition, type GameId, type ScanHints } from '../types';
 import { settings } from '../util/settings';
@@ -13,7 +14,11 @@ export function cardImg(card: CardPrinting, large = false): HTMLImageElement {
   const img = h('img', { class: 'card-img', alt: card.name, loading: 'lazy', decoding: 'async' });
   if (large && card.imageLarge) img.src = card.imageLarge;
   else void imageUrl(card).then((u) => u && (img.src = u));
-  img.onerror = () => img.classList.add('missing');
+  // Failed loads show the plain placeholder, not the browser's broken-image icon and alt text.
+  img.onerror = () => {
+    img.classList.add('missing');
+    img.removeAttribute('src');
+  };
   return img;
 }
 
@@ -78,7 +83,7 @@ export interface AddOptions {
 }
 
 export async function openAddSheet(partialCard: CardPrinting, opts: AddOptions = {}): Promise<void> {
-  const card = partialCard.partial ? await GAMES[partialCard.game].complete(partialCard).catch(() => partialCard) : partialCard;
+  const card = partialCard.partial || !partialCard.prices ? await GAMES[partialCard.game].complete(partialCard).catch(() => partialCard) : partialCard;
   const s = settings();
   const hints = opts.hints ?? {};
   let variant = guessFinish(card, hints, opts.shimmer).variant;
@@ -131,6 +136,18 @@ export async function openAddSheet(partialCard: CardPrinting, opts: AddOptions =
       ),
     ),
   );
+}
+
+/** "View on TCGplayer ↗", named after where the link actually goes. */
+function linkLabel(url: string): string {
+  let host = '';
+  try {
+    host = new URL(url).hostname;
+  } catch {
+    // Not a URL: generic label.
+  }
+  const site = [['tcgplayer', 'TCGplayer'], ['scryfall', 'Scryfall'], ['ygoprodeck', 'YGOPRODeck'], ['tcgdex', 'TCGdex'], ['lorcast', 'Lorcast'], ['pokemontcg', 'pokemontcg.io']].find(([k]) => host.includes(k!));
+  return site ? `View on ${site[1]} ↗` : 'View online ↗';
 }
 
 export function priceNote(card: CardPrinting): HTMLElement | false {
@@ -238,7 +255,15 @@ export function openCandidatesSheet(rec: Recognition, onAdded?: (e: CollectionEn
         },
         'Search manually instead',
       ),
-      hints.raw && h('details', { class: 'raw' }, h('summary', null, 'What the scanner saw'), h('pre', null, Object.entries(hints.raw).map(([k, v]) => `[${k}]\n${v}\n`).join('\n'))),
+      hints.raw &&
+        h(
+          'details',
+          { class: 'raw' },
+          h('summary', null, 'What the scanner saw'),
+          h('pre', null, Object.entries(hints.raw).map(([k, v]) => `[${k}]\n${v}\n`).join('\n')),
+          h('button', { type: 'button', class: 'wide', onclick: () => void shareScanReport() }, 'Share scan report'),
+          h('p', { class: 'muted small' }, 'Your last scans with their photos, to send to whoever maintains the app so misreads can be fixed.'),
+        ),
     ),
   );
   render();
@@ -278,7 +303,7 @@ export function openEntrySheet(entry: CollectionEntry): void {
           valueEl,
           priceNote(card),
           details(card),
-          card.url && h('a', { href: card.url, target: '_blank', rel: 'noopener', class: 'ext' }, card.source === 'ygoprodeck' ? 'View on YGOPRODeck ↗' : 'View on TCGplayer ↗'),
+          card.url && h('a', { href: card.url, target: '_blank', rel: 'noopener', class: 'ext' }, linkLabel(card.url)),
         ),
       ),
       h(

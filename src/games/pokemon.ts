@@ -4,7 +4,9 @@ import { normalize, partialSimilarity, sameCollectorNumber, stripLeadingZeros } 
 import { settings } from '../util/settings';
 import { rank, weightedScore, type Game } from './game';
 import { getJson, getJsonOrNull, qs } from './http';
-import { dexByName, dexByNumber, dexCard, dexSetCards, dexSets } from './tcgdex';
+import { namesSet, numberPrefix, pokemonSet, promoSet, sameTotal, setsForCode, totalDigits } from './pokemonSetIndex';
+import { dexByName, dexByNumber, dexCardWithMarket, dexPromo, dexSetCards, dexSets, setIdOf, type DexCardmarket } from './tcgdex';
+import { eurToUsd } from './fx';
 
 // ---------------------------------------------------------------------------------------------
 // Catalogs. TCGdex (tcgdex.ts) is primary: free, maintained, and priced per printing.
@@ -156,22 +158,48 @@ function nameClause(name: string): string {
 
 // ---------------------------------------------------------------------------------------------
 
+/**
+ * Does the printed set code (or promo prefix) read off the card name this card's set? 1 / 0, or
+ * undefined when nothing usable was read: a code no known set has (misread, or a set newer than
+ * the table) only counts when it agrees.
+ */
+function setAgreement(card: CardPrinting, hints: ScanHints): number | undefined {
+  const promo = promoSet(hints);
+  if (promo) return setIdOf(card.key) === promo ? 1 : 0;
+  // AI scan names the expansion from its symbol; OCR never sets this.
+  if (!hints.setCode) return hints.setName ? (namesSet(card, hints.setName) ? 1 : 0) : undefined;
+  const same = normalize(card.setCode) === normalize(hints.setCode);
+  const named = setsForCode(hints.setCode, hints.number);
+  if (!named.length) return same ? 1 : undefined;
+  return same || named.some((s) => s.id === setIdOf(card.key)) ? 1 : 0;
+}
+
+/** Set size agreement. Promos print no size, so a size read off the card counts against them. */
+function totalAgreement(card: CardPrinting, hints: ScanHints): number | undefined {
+  if (!hints.total) return undefined;
+  const total = card.number.split('/')[1];
+  if (total !== undefined) return sameTotal(total, hints.total) ? 1 : 0;
+  // Unknown size (a brand-new set's partial result): leave it out rather than count it wrong.
+  return pokemonSet(setIdOf(card.key)) ? 0 : undefined;
+}
+
 function score(card: CardPrinting, hints: ScanHints): number {
-  const [num, total] = card.number.split('/');
+  const [num] = card.number.split('/');
   const nameText = hints.nameText || hints.name;
-  const setMatch = hints.setCode && normalize(card.setCode) === normalize(hints.setCode);
   return weightedScore([
     [0.5, nameText ? partialSimilarity(card.name, nameText) : undefined],
     [0.35, hints.number ? (sameCollectorNumber(num ?? '', hints.number) ? 1 : 0) : undefined],
-    // Partial results don't know their set size yet: leave the total out rather than count it wrong.
-    [0.1, hints.total && total !== undefined ? (sameCollectorNumber(total, hints.total) ? 1 : 0) : undefined],
-    [0.05, setMatch ? 1 : undefined],
+    [0.1, totalAgreement(card, hints)],
+    // A set code is printed on Scarlet & Violet cards onwards.
+    [0.15, setAgreement(card, hints)],
   ]);
 }
 
 async function lookupDex(hints: ScanHints): Promise<CardPrinting[]> {
   const jobs: Array<Promise<CardPrinting[]>> = [];
-  if (hints.number && hints.total && /^\d+$/.test(hints.total)) jobs.push(dexByNumber(hints.number, hints.total));
+  const promo = promoSet(hints);
+  if (hints.number && promo) jobs.push(dexPromo(promo, hints.number));
+  else if (hints.number && (totalDigits(hints.total) || numberPrefix(hints.number) || hints.setCode)) jobs.push(dexByNumber(hints.number, hints.total, hints.setCode, hints.setName));
   // Search on each plausible name word. OCR often adds a stray letter ("Pikachuz"), and TCGdex
   // matches substrings, so long words are searched by their first six letters.
   const words = [...new Set([hints.name ? longestWord(hints.name) : '', ...(hints.nameCandidates ?? [])].filter((w) => w.length >= 4))];
@@ -214,6 +242,56 @@ async function lookup(hints: ScanHints): Promise<CardPrinting[]> {
   return lookupPtcg(hints);
 }
 
+// ---------------------------------------------------------------------------------------------
+// Prices TCGdex doesn't have. It takes TCGplayer prices per TCGplayer group (set), and the
+// galleries and vaults (Trainer Gallery, Galarian Gallery, Shiny Vault, Classic Collection…) are
+// separate groups it doesn't fetch, so those cards come back unpriced.
+
+/** The same printing on pokemontcg.io: same number and name, matched to the set by name or size. */
+async function ptcgTwin(card: CardPrinting): Promise<CardPrinting | null> {
+  const [num, official] = card.number.split('/');
+  const name = card.name.replace(/["\\]/g, '');
+  const found = await ptcgQuery(`${numberClause(num!)} name:"${name}"`, 20);
+  const pick =
+    found.find((c) => normalize(c.set.name) === normalize(card.setName)) ??
+    (official ? found.find((c) => String(c.set.printedTotal) === official) : undefined) ??
+    (found.length === 1 ? found[0] : undefined);
+  return pick ? fromPtcg(pick) : null;
+}
+
+const cents = (v: number): number => Math.round(v * 100) / 100;
+
+/** Cardmarket's trend price (EUR) as USD, for the base finish and the reverse holo. */
+async function cardmarketPrices(card: CardPrinting, cm: DexCardmarket | undefined): Promise<Pick<CardPrinting, 'prices' | 'priceSource' | 'pricesUpdatedAt'> | null> {
+  if (!cm) return null;
+  const base = cm.trend ?? cm.avg30 ?? cm.avg;
+  const reverse = cm['trend-holo'] ?? cm['avg30-holo'] ?? cm['avg-holo'];
+  if (!base && !reverse) return null;
+  const rate = await eurToUsd();
+  if (!rate) return null;
+  const prices: Record<string, number> = {};
+  const baseFinish = card.variants.find((v) => v !== 'Reverse Holofoil') ?? 'Normal';
+  if (base) prices[baseFinish] = cents(base * rate);
+  if (reverse && card.variants.includes('Reverse Holofoil')) prices['Reverse Holofoil'] = cents(reverse * rate);
+  if (!Object.keys(prices).length) return null;
+  return {
+    prices,
+    priceSource: `Cardmarket trend ≈ €${(base ?? reverse)!.toFixed(2)} (converted at $${rate.toFixed(2)}/€)`,
+    pricesUpdatedAt: new Date().toISOString(),
+  };
+}
+
+/** TCGplayer via TCGdex, else TCGplayer via pokemontcg.io, else Cardmarket converted to USD. */
+async function withFallbackPrices(card: CardPrinting, cardmarket?: DexCardmarket): Promise<CardPrinting> {
+  if (card.prices) return card;
+  const twin = await ptcgTwin(card).catch(() => null);
+  if (twin?.prices) {
+    return { ...card, prices: twin.prices, priceSource: twin.priceSource, pricesUpdatedAt: twin.pricesUpdatedAt, url: card.url?.includes('tcgplayer') ? card.url : (twin.url ?? card.url) };
+  }
+  const cm = await cardmarketPrices(card, cardmarket).catch(() => null);
+  return cm ? { ...card, ...cm } : card;
+}
+
 function longestWord(name: string): string {
   return name
     .replace(/["\\:()*]/g, ' ')
@@ -221,9 +299,11 @@ function longestWord(name: string): string {
     .sort((a, b) => b.length - a.length)[0] ?? name;
 }
 
+/** The number was read and agrees, and so does the set size or the printed set code / promo prefix. */
 function exactId(card: CardPrinting, hints: ScanHints): boolean {
   const [num, total] = card.number.split('/');
-  return !!hints.number && !!hints.total && !!num && !!total && sameCollectorNumber(num, hints.number) && sameCollectorNumber(total, hints.total);
+  if (!hints.number || !num || !sameCollectorNumber(num, hints.number)) return false;
+  return (!!hints.total && sameTotal(total, hints.total)) || setAgreement(card, hints) === 1;
 }
 
 export const pokemon: Game = {
@@ -241,12 +321,17 @@ export const pokemon: Game = {
   },
 
   async complete(card) {
-    if (!card.partial) return card;
-    return (await dexCard(card.key)) ?? card;
+    if (!card.partial && card.prices) return card;
+    const hit = card.source === 'tcgdex' ? await dexCardWithMarket(card.key).catch(() => null) : null;
+    if (hit) return withFallbackPrices(hit.card, hit.cardmarket);
+    return card.partial ? card : withFallbackPrices(card);
   },
 
   async refresh(card) {
-    if (card.source === 'tcgdex') return dexCard(card.key);
+    if (card.source === 'tcgdex') {
+      const hit = await dexCardWithMarket(card.key);
+      return hit ? withFallbackPrices(hit.card, hit.cardmarket) : null;
+    }
     // Saved from pokemontcg.io: take current prices from the same card in TCGdex (same name,
     // number and set size), keeping the saved identity so the collection row doesn't move.
     const [num, total] = card.number.split('/');

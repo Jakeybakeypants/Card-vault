@@ -24,6 +24,11 @@ const SCHEMA = {
       description:
         'Pokémon: the 2-4 letter set code beside the number, e.g. "PAL". Yu-Gi-Oh!: the full code under the artwork, e.g. "LOB-EN005". Magic: the 3-5 character set code bottom-left, e.g. "M21". Lorcana: the set number after the language, e.g. "1" in "12/204 • EN • 1".',
     },
+    set_name: {
+      type: 'string',
+      description:
+        'The expansion this printing is from, if you can tell from the set symbol, set code or card design, e.g. "Brilliant Stars", "Crown Zenith", "151". Empty if unsure.',
+    },
     passcode: { type: 'string', description: 'Yu-Gi-Oh!: the 8-digit number bottom-left. Empty for other games.' },
     variant: {
       type: 'string',
@@ -37,7 +42,7 @@ const SCHEMA = {
     },
     language: { type: 'string', description: 'Two-letter language code of the card text, e.g. "EN", "JP", "DE".' },
   },
-  required: ['game', 'name', 'collector_number', 'set_total', 'set_code', 'passcode', 'variant', 'language'],
+  required: ['game', 'name', 'collector_number', 'set_total', 'set_code', 'set_name', 'passcode', 'variant', 'language'],
   additionalProperties: false,
 } as const;
 
@@ -47,6 +52,7 @@ interface AiCard {
   collector_number: string;
   set_total: string;
   set_code: string;
+  set_name: string;
   passcode: string;
   variant: string;
   language: string;
@@ -101,6 +107,7 @@ export async function readCardWithClaude(canvas: HTMLCanvasElement, apiKey: stri
     variant: blank(card.variant),
     variantConfidence: blank(card.variant) ? 0.8 : undefined,
     language: blank(card.language)?.toUpperCase(),
+    setName: blank(card.set_name ?? ''),
     raw: { claude: text.text },
   };
   if (card.game === 'pokemon' || card.game === 'lorcana') {

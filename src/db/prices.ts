@@ -34,8 +34,12 @@ export function refreshPrices(opts: { maxAgeMs?: number; onProgress?: (done: num
         const card = group[0]!.card;
         const fresh = await GAMES[card.game].refresh(card).catch(() => null);
         if (fresh) {
-          // Keep the saved identity; take the new facts and prices.
-          const checked = { ...fresh, key: card.key, partial: undefined, pricesUpdatedAt: fresh.pricesUpdatedAt ?? new Date().toISOString() };
+          // Keep the saved identity; take the new facts and prices. No price today (between
+          // sales, source down) keeps the last known one rather than wiping it.
+          const priced = fresh.prices
+            ? fresh
+            : { ...fresh, prices: card.prices, priceSource: card.priceSource, pricesUpdatedAt: card.pricesUpdatedAt, url: card.url ?? fresh.url };
+          const checked = { ...priced, key: card.key, partial: undefined, pricesUpdatedAt: priced.pricesUpdatedAt ?? new Date().toISOString() };
           for (const e of group) updated.push({ ...e, card: checked });
         }
         opts.onProgress?.(++done, groups.length);

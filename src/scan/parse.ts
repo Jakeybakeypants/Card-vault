@@ -73,7 +73,7 @@ function fixNumber(s: string): string {
 
 const POKEMON_LANGUAGES = new Set(['EN', 'DE', 'FR', 'IT', 'ES', 'PT', 'JP', 'KR']);
 
-const POKEMON_PROMO_PREFIXES = ['SWSH', 'HGSS', 'SVP', 'SM', 'XY', 'BW', 'DP', 'SV'];
+const POKEMON_PROMO_PREFIXES = ['SWSH', 'HGSS', 'SVP', 'MEP', 'SM', 'XY', 'BW', 'DP', 'SV'];
 
 // Words that surround a Pokémon name on the top line and are never part of it.
 const POKEMON_NAME_NOISE = new Set([
@@ -90,10 +90,15 @@ export function parsePokemon(raw: Record<string, string>): ScanHints {
 
   // Collector number "025/198", "TG05/TG30", "GG12/GG70", "RC5/RC32", "4/102". The separator is
   // sometimes read as | or \.
-  const num = new RegExp(`(?<![0-9A-Za-z])([A-Z]{0,2}${DIGITISH}{1,3}[a-z]?)\\s*[/|\\\\]\\s*([A-Z]{0,2}${DIGITISH}{2,3})(?![0-9])`).exec(bottom);
+  // The size's subset prefix is often mangled ("SV122" read as "5v122").
+  const num = new RegExp(`(?<![0-9A-Za-z])([A-Z]{0,2}${DIGITISH}{1,3}[a-z]?)\\s*[/|\\\\]\\s*((?:[A-Z]{1,2}|[A-Z5][a-z])?${DIGITISH}{2,3})(?![0-9])`).exec(bottom);
   if (num) {
     hints.number = fixNumber(num[1]!);
     hints.total = fixNumber(num[2]!);
+    // A subset number has the same prefix on both sides: TG05/TG30, SV107/SV122.
+    const prefix = POKEMON_SUBSET_PREFIXES.find((p) => hints.number!.startsWith(p) && /^\d/.test(hints.number!.slice(p.length)));
+    const sizeDigits = prefix ? num[2]!.slice(prefix.length) : '';
+    if (prefix && new RegExp(`^${DIGITISH}{2,3}$`).test(sizeDigits)) hints.total = prefix + toDigits(sizeDigits);
     // Set code printed just before the number on Sword & Shield / Scarlet & Violet cards: "PAL EN 123/193".
     const before = bottom.slice(0, num.index);
     // OCR often drops the space between them: "SVIEN".
@@ -109,13 +114,19 @@ export function parsePokemon(raw: Record<string, string>): ScanHints {
       }
     }
   } else {
-    // Black Star promos: "SWSH050", "SM210", "XY 67".
-    const promo = new RegExp(`\\b(${POKEMON_PROMO_PREFIXES.join('|')})\\s?-?\\s?(${DIGITISH}{2,3})\\b`).exec(bottom);
+    // Black Star promos: "SWSH050", "SM210", "XY 67", and "SVP EN 085" / "MEP EN 001" with the
+    // language between the code and the number.
+    const promo = new RegExp(`\\b(${POKEMON_PROMO_PREFIXES.join('|')})\\s?(?:(EN|DE|FR|IT|ES|PT)\\s*)?-?\\s?(${DIGITISH}{2,3})\\b`).exec(bottom);
     if (promo) {
-      const digits = toDigits(promo[2]!);
-      if (promo[1] === 'SVP' || promo[1] === 'SV') {
+      const digits = toDigits(promo[3]!);
+      if (promo[2]) hints.language = promo[2];
+      if (promo[1] === 'SV' && !promo[2]) {
+        // "SV107" with the size unreadable is a Shiny Vault number, not an SVP promo (those
+        // print "SVP EN 107").
+        hints.number = `SV${digits}`;
+      } else if (promo[1] === 'SVP' || promo[1] === 'SV' || promo[1] === 'MEP') {
         hints.number = digits;
-        hints.setCode = 'SVP';
+        hints.setCode = promo[1] === 'MEP' ? 'MEP' : 'SVP';
       } else {
         hints.number = promo[1] + digits;
       }

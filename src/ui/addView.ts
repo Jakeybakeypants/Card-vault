@@ -1,4 +1,5 @@
 import { GAME_LIST, GAMES } from '../games';
+import { noteSearchedCard } from '../scan/scanLog';
 import type { GameId } from '../types';
 import { settings, updateSettings } from '../util/settings';
 import { cardRow, openAddSheet } from './cards';
@@ -54,7 +55,7 @@ export function addView(): AddView {
     try {
       const cards = await GAMES[game].search(q);
       if (mine !== seq) return;
-      clear(results, cards.length ? cards.slice(0, 80).map((c) => cardRow(c, () => openAddSheet(c))) : h('p', { class: 'muted' }, `No ${GAMES[game].name} cards found for “${q}”.`));
+      clear(results, cards.length ? cards.slice(0, 80).map((c) => cardRow(c, () => void openAddSheet(c, { onAdded: (e) => noteSearchedCard(e.card) }))) : h('p', { class: 'muted' }, `No ${GAMES[game].name} cards found for “${q}”.`));
     } catch (e) {
       if (mine !== seq) return;
       clear(results, h('p', { class: 'warn' }, `Search failed: ${e instanceof Error ? e.message : String(e)}`));

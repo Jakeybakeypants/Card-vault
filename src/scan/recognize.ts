@@ -38,8 +38,19 @@ export async function readWithOcr(game: GameId, card: HTMLCanvasElement): Promis
     for (const r of g.regions.filter((r) => r.key !== 'name')) inverted[r.key] = await ocrRegion(card, r, true);
     const retry = g.parse(texts(inverted));
     if (hasId(retry)) {
-      hints = { ...retry, name: hints.name ?? retry.name, nameText: hints.nameText };
+      hints = { ...retry, name: hints.name ?? retry.name, nameText: hints.nameText, nameCandidates: hints.nameCandidates };
       results = inverted;
+    }
+  }
+  // No name either: on full arts, special illustration rares and gold cards the name is light
+  // text over the artwork. Re-read the name strip inverted.
+  const nameRegion = g.regions.find((r) => r.key === 'name');
+  if (nameRegion && !hints.name && !hints.nameCandidates?.length) {
+    const invertedName = await ocrRegion(card, nameRegion, true);
+    const retry = g.parse({ ...texts(results), name: invertedName.text });
+    if (retry.name || retry.nameCandidates?.length) {
+      hints = { ...hints, name: retry.name, nameText: retry.nameText, nameCandidates: retry.nameCandidates };
+      hints.raw = { ...hints.raw, 'name (inverted)': invertedName.text };
     }
   }
   // Second look at the word that holds the collector number / set code.

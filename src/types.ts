@@ -71,6 +71,8 @@ export interface ScanHints {
   total?: string;
   /** Pokémon: PTCGO set code seen near the number (`PAL`). YGO: full set code (`LOB-EN005`). */
   setCode?: string;
+  /** The expansion's name, when it could be told (AI scan reads the set symbol). */
+  setName?: string;
   /** Yu-Gi-Oh!: 8-digit passcode. */
   passcode?: string;
   /** Variant read off the card (`1st Edition`, `Reverse Holofoil`…). */

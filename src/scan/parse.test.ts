@@ -133,3 +133,24 @@ describe('parseLorcana', () => {
     expect(parseLorcana({ bottom: '2O7/2O4 · EN · 2' })).toMatchObject({ number: '207', total: '204', setCode: '2' });
   });
 });
+
+describe('Pokémon promos', () => {
+  it('reads Scarlet & Violet and Mega Evolution promo numbers', () => {
+    expect(parsePokemon({ bottom: 'G SVP EN 085 Illus. 5ban Graphics' })).toMatchObject({ number: '085', setCode: 'SVP', language: 'EN' });
+    expect(parsePokemon({ bottom: 'I MEP EN 012' })).toMatchObject({ number: '012', setCode: 'MEP' });
+    expect(parsePokemon({ bottom: 'SWSH050' })).toMatchObject({ number: 'SWSH050' });
+  });
+});
+
+describe('Pokémon subset numbers', () => {
+  it('repairs a mangled size prefix from the number’s prefix', () => {
+    expect(parsePokemon({ bottom: 'SV107/5v122' })).toMatchObject({ number: 'SV107', total: 'SV122' });
+    expect(parsePokemon({ bottom: 'TG05/T630' })).toMatchObject({ number: 'TG05', total: 'TG30' });
+    expect(parsePokemon({ bottom: 'GG44/GG70' })).toMatchObject({ number: 'GG44', total: 'GG70' });
+  });
+
+  it('reads a bare Shiny Vault number as one, not as an SVP promo', () => {
+    expect(parsePokemon({ bottom: 'SV107 Illus. 5ban' })).toMatchObject({ number: 'SV107' });
+    expect(parsePokemon({ bottom: 'SV107' }).setCode).toBeUndefined();
+  });
+});

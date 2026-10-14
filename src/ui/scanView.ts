@@ -1,9 +1,10 @@
-import { GAME_LIST, isConfident } from '../games';
+import { GAME_LIST, GAMES, isConfident } from '../games';
 import { addCard } from '../db/store';
 import { Camera, canvasFromFile } from '../scan/camera';
 import { CARD_ASPECT } from '../scan/parse';
 import { onOcrProgress, ocrWorker } from '../scan/ocr';
 import { guessFinish, hasId, lookUp, mergeHints, readWithOcr, recognizeWithClaude, type Recognition } from '../scan/recognize';
+import { awaitSearch, logScan, setOutcome, type ScanLogEntry } from '../scan/scanLog';
 import type { CollectionEntry, GameId, ScanHints } from '../types';
 import { onSettings, settings, updateSettings } from '../util/settings';
 import { addedToast, cardImg, openCandidatesSheet, openEntrySheet } from './cards';
@@ -67,8 +68,12 @@ export function scanView(nav: { search: (q: string, game: GameId) => void }): Vi
     try {
       const s = settings();
       let rec: Recognition | undefined;
-      if (s.useAi && s.anthropicApiKey) {
-        const card = await grab();
+      let lastCard: HTMLCanvasElement | undefined;
+      let used = 0;
+      const ai = !!(s.useAi && s.anthropicApiKey);
+      if (ai) {
+        const card = (lastCard = await grab());
+        used = 1;
         showPreview(card);
         setStatus('Asking Claude…');
         rec = await recognizeWithClaude(card, s.anthropicApiKey);
@@ -76,7 +81,8 @@ export function scanView(nav: { search: (q: string, game: GameId) => void }): Vi
         const reads: ScanHints[] = [];
         for (let i = 0; i < frames; i++) {
           if (i > 0) await pause(150);
-          const card = await grab();
+          const card = (lastCard = await grab());
+          used = i + 1;
           showPreview(card);
           const read = await readWithOcr(s.game, card);
           reads.push(read);
@@ -90,7 +96,7 @@ export function scanView(nav: { search: (q: string, game: GameId) => void }): Vi
         }
         rec ??= { game: s.game, hints: mergeHints(reads), candidates: [] };
       }
-      await handle(rec);
+      await handle(rec, logScan(lastCard, rec, { mode: ai ? 'ai' : 'ocr', frames: used }));
     } catch (e) {
       console.error(e);
       setStatus(e instanceof Error ? e.message : 'Scan failed', 'warn');
@@ -102,26 +108,52 @@ export function scanView(nav: { search: (q: string, game: GameId) => void }): Vi
     }
   }
 
-  async function handle(rec: Recognition): Promise<void> {
+  async function handle(rec: Recognition, log: ScanLogEntry): Promise<void> {
     console.debug('[scan]', rec.hints, rec.candidates.slice(0, 5), 'shimmer', rec.shimmer);
     const top = rec.candidates[0];
     if (top && isConfident(rec.candidates) && settings().autoAdd) {
       const s = settings();
-      const finish = guessFinish(top.card, rec.hints, rec.shimmer);
-      const { entry, undo } = await addCard(top.card, {
+      // Cards the main catalog has no price for get one from the fallback sources first.
+      const card = top.card.prices ? top.card : await GAMES[top.card.game].complete(top.card).catch(() => top.card);
+      const finish = guessFinish(card, rec.hints, rec.shimmer);
+      const { entry, undo } = await addCard(card, {
         variant: finish.variant,
         condition: s.defaultCondition,
         language: rec.hints.language && LANGUAGES.includes(rec.hints.language) ? rec.hints.language : s.defaultLanguage,
       });
-      setStatus(`✓ ${top.card.name} · ${top.card.number}`, 'ok');
+      setStatus(`✓ ${card.name} · ${card.number}`, 'ok');
       navigator.vibrate?.(40);
-      addedToast(entry, undo, { confidence: finish.confidence, shimmer: rec.shimmer, onChange: replaceRemembered });
+      const added = `added automatically: ${card.key} (${card.name} ${card.number}) as ${finish.variant}`;
+      setOutcome(log, added);
+      const undoLogged = async (): Promise<void> => {
+        await undo();
+        setOutcome(log, `${added}, then undone`);
+      };
+      addedToast(entry, undoLogged, {
+        confidence: finish.confidence,
+        shimmer: rec.shimmer,
+        onChange: (prevId, next) => {
+          setOutcome(log, `${added}, finish changed to ${next.variant}`);
+          replaceRemembered(prevId, next);
+        },
+      });
       remember(entry);
       return;
     }
     const why = rec.hints.glare ? 'Glare is hiding part of the card. ' : '';
     setStatus(rec.candidates.length ? `${why}${rec.candidates.length} possible matches` : `${why}No match`, rec.candidates.length && !why ? '' : 'warn');
-    openCandidatesSheet(rec, remember, (q) => nav.search(q, rec.game));
+    openCandidatesSheet(
+      rec,
+      (e) => {
+        const i = rec.candidates.findIndex((c) => c.card.key === e.card.key);
+        setOutcome(log, `picked ${e.card.key} (${e.card.name} ${e.card.number}), match #${i + 1} of ${rec.candidates.length}, as ${e.variant}`);
+        remember(e);
+      },
+      (q) => {
+        awaitSearch(log);
+        nav.search(q, rec.game);
+      },
+    );
   }
 
   function replaceRemembered(prevId: string, next: CollectionEntry): void {
