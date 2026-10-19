@@ -92,6 +92,13 @@ export interface Candidate {
   score: number;
   /** 0–1: how alike the photo and the catalog picture are, when they could be compared. */
   visual?: number;
+  /**
+   * Which of the scan's signals this printing agrees with: name similarity (0–1), whether the
+   * collector number matches, and whether the set does (printed size or set code). Each is
+   * undefined when the scan didn't read that signal. A game that fills this in gets the
+   * two-signal rule in `isConfident`; one that doesn't is judged on the score alone.
+   */
+  signals?: { name?: number; number?: boolean; set?: boolean };
 }
 
 /** A set / expansion, as listed by a catalog. */

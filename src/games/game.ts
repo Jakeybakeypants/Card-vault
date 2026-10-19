@@ -1,5 +1,6 @@
 import type { Region } from '../scan/parse';
 import type { Candidate, CardPrinting, CardSet, GameId, ScanHints } from '../types';
+import { levenshtein, normalize, stripLeadingZeros } from '../util/text';
 
 export interface Game {
   id: GameId;
@@ -26,11 +27,57 @@ export interface Game {
   setCards(set: CardSet): Promise<CardPrinting[]>;
 }
 
-/** Scanned results are trusted enough to add without asking when this returns true. */
+/**
+ * The marks of a special printing of the same Pokémon ("Charizard ex", "Pikachu V", "Mewtwo-GX",
+ * "Umbreon ☆", "Garchomp C LV.X"). OCR usually drops them: they are small, stylised and often
+ * foil. Used to compare names with and without them.
+ */
+export const NAME_SUFFIX = /\s+(ex|gx|v|vmax|vstar|v-union|lv\.x|break|prime|legend|star|☆|◇)$|-(ex|gx)$/i;
+
+/** "Charizard ex" → "charizard": the Pokémon's name without a special-printing mark. */
+export function baseName(name: string): string {
+  return normalize(name.replace(NAME_SUFFIX, ''));
+}
+
+/** Photo likeness at or above which a catalog picture counts as confirming the match. */
+const PHOTO_CONFIRMS = 0.5;
+/** Name similarity that counts as reading the name: with the photo agreeing, and on text alone. */
+const NAME_READ = 0.75;
+const NAME_SURE = 0.9;
+
+/** "63/198" and "68/198", "91/102" and "1/102", or the same line: collector lines one OCR slip apart. */
+function nearLine(a: CardPrinting, b: CardPrinting): boolean {
+  const line = (c: CardPrinting) => c.number.split('/').map(stripLeadingZeros).join('/');
+  return levenshtein(line(a), line(b)) <= 1;
+}
+
+/**
+ * Scanned results are trusted enough to add without asking when this returns true: a clear top
+ * score and, for games that report `signals`, two independent signals that agree. Either the
+ * name and the collector number (on text alone only when the set agrees too and no neighbour
+ * is in the running: a card whose line is one digit away, which is where a misread digit
+ * lands, or an outright reprint, and whose name reads as well as the top one's; then the photo
+ * must side with the top one), or the number and set confirmed by the photo (the name was
+ * unreadable), or the name confirmed by the photo (the number was unreadable). A candidate
+ * whose catalog picture could not be compared never wins over one the photo confirmed.
+ */
 export function isConfident(candidates: Candidate[]): boolean {
-  const [top, second] = candidates;
+  const [top, ...rest] = candidates;
   if (!top || top.score < 0.8) return false;
-  return !second || top.score - second.score >= 0.08;
+  const second = rest[0];
+  if (second && top.score - second.score < 0.08) return false;
+  if (top.visual === undefined && rest.some((c) => c.visual !== undefined && c.visual >= PHOTO_CONFIRMS && top.score - c.score < 0.15)) return false;
+  const s = top.signals;
+  if (!s) return true;
+  const photo = top.visual ?? 0;
+  const name = s.name ?? 0;
+  const sameName = rest.filter((c) => baseName(c.card.name) === baseName(top.card.name));
+  // The photo prefers another printing of the same name: the text probably misled.
+  if (sameName.some((c) => c.visual !== undefined && c.visual > photo + 0.1)) return false;
+  if (name >= NAME_READ && s.number && photo >= PHOTO_CONFIRMS) return true;
+  if (name >= NAME_SURE && s.number && s.set) return !rest.some((c) => (c.signals?.name ?? 0) >= name - 0.05 && nearLine(c.card, top.card));
+  if (s.number && s.set) return photo >= 0.6;
+  return name >= NAME_READ && photo >= PHOTO_CONFIRMS;
 }
 
 /**

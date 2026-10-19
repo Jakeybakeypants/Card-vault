@@ -1,6 +1,6 @@
 import type { CardPrinting, CardSet } from '../types';
-import { candidateSets, localIdForms, localIdIn, pokemonSet, totalDigits } from './pokemonSetIndex';
-import { sameCollectorNumber } from '../util/text';
+import { candidateSets, CLASSIC_COLLECTION_SET, classicReprints, localIdForms, localIdIn, pokemonSet, totalDigits } from './pokemonSetIndex';
+import { levenshtein, sameCollectorNumber, stripLeadingZeros } from '../util/text';
 import { getJson, getJsonOrNull, qs } from './http';
 
 // TCGdex (https://tcgdex.dev): free, keyless, open-source Pokémon catalog. Each full card record
@@ -265,10 +265,14 @@ async function inSet(setId: string, number: string): Promise<DexCard | null> {
   return null;
 }
 
+/** How many sets to ask for one number: sizes shared by many sets (12, 17, 100, 198…) stop here. */
+const MAX_SETS_PER_NUMBER = 12;
+
 /**
  * A printed collector number: "063" + "198" (+ "SVI"), "TG05" + "TG30", "SV001" + "SV122".
  * The set code, when read, names the set; otherwise every set of that size is tried, newest
- * first, including sets released after the generated table.
+ * first, including sets released after the generated table. Classic Collection reprints print
+ * their original line ("4/102" on the Celebrations Charizard), so those are asked for as well.
  */
 export async function dexByNumber(number: string, total: string | undefined, setCode?: string, setName?: string): Promise<CardPrinting[]> {
   const ids = [...candidateSets({ number, total, setCode, setName }), ...(setCode ? candidateSets({ number, total, setName }) : [])].map((s) => s.id);
@@ -279,8 +283,8 @@ export async function dexByNumber(number: string, total: string | undefined, set
       if (!pokemonSet(s.id) && !isPocketSet(s.id) && String(s.cardCount?.official) === size) ids.push(s.id);
     }
   }
-  const tries = [...new Set(ids)].slice(0, 8);
-  const found = await Promise.all(tries.map((id) => inSet(id, number)));
+  const tries = [...new Set(ids)].slice(0, MAX_SETS_PER_NUMBER);
+  const found = await Promise.all([...tries.map((id) => inSet(id, number)), ...classicReprints(number, total).map((id) => inSet(CLASSIC_COLLECTION_SET, id))]);
   const seen = new Set<string>();
   return found.filter((c): c is DexCard => !!c && !seen.has(c.id) && !!seen.add(c.id)).map(fromDex);
 }
@@ -291,16 +295,26 @@ export async function dexPromo(setId: string, number: string): Promise<CardPrint
   return c ? [fromDex(c)] : [];
 }
 
+/** "063" and "068", "91" and "1": collector numbers one OCR slip apart. */
+function nearNumber(a: string, b: string): boolean {
+  return levenshtein(stripLeadingZeros(a).toUpperCase(), stripLeadingZeros(b).toUpperCase()) <= 1;
+}
+
 /**
- * Every card whose name contains `name`, as partial results. Set names, sizes and dates come
- * from the generated table; the live set list fills in sets newer than it.
+ * Every card whose name contains `name`, as partial results. With a number read, the hits with
+ * that number come first, then those one digit away (a misread digit lands on a same-name
+ * neighbour, and the right printing must stay in the list for the photo to pick); without any
+ * such hit, every printing of the name. Set names, sizes and dates come from the generated
+ * table; the live set list fills in sets newer than it.
  */
 export async function dexByName(name: string, number?: string): Promise<CardPrinting[]> {
   const [list, sets] = await Promise.all([getJson<DexBrief[]>(`${API}/cards?${qs({ name })}`), liveSets().catch(() => [] as DexSetBrief[])]);
   const setById = new Map(sets.map((s) => [s.id, s]));
   const physical = list.filter((b) => !isPocketSet(setIdOf(b.id)));
   const withNumber = number ? physical.filter((b) => sameCollectorNumber(b.localId, number)) : [];
-  return (withNumber.length ? withNumber : physical).map((b) => {
+  const near = number ? physical.filter((b) => !withNumber.includes(b) && nearNumber(b.localId, number)) : [];
+  const kept = withNumber.length || near.length ? [...withNumber, ...near] : physical;
+  return kept.map((b) => {
     const card = partialFromBrief(b);
     const set = setById.get(setIdOf(b.id));
     if (set && !pokemonSet(set.id)) {

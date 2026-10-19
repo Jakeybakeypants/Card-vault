@@ -1,10 +1,10 @@
 import { parsePokemon, REGIONS } from '../scan/parse';
 import type { Candidate, CardPrinting, CardSet, ScanHints } from '../types';
-import { normalize, partialSimilarity, sameCollectorNumber, stripLeadingZeros } from '../util/text';
+import { levenshtein, normalize, partialSimilarity, sameCollectorNumber, stripLeadingZeros } from '../util/text';
 import { settings } from '../util/settings';
-import { rank, weightedScore, type Game } from './game';
+import { NAME_SUFFIX, rank, weightedScore, type Game } from './game';
 import { getJson, getJsonOrNull, qs } from './http';
-import { namesSet, numberPrefix, pokemonSet, promoSet, sameTotal, setsForCode, totalDigits } from './pokemonSetIndex';
+import { classicPrintedNumber, namesSet, numberPrefix, pokemonSet, promoCodeDoubtful, promoSet, sameTotal, setsForCode, totalDigits } from './pokemonSetIndex';
 import { dexByName, dexByNumber, dexCardWithMarket, dexPromo, dexSetCards, dexSets, setIdOf, type DexCardmarket } from './tcgdex';
 import { eurToUsd } from './fx';
 
@@ -180,14 +180,23 @@ function nameClause(name: string): string {
 
 // ---------------------------------------------------------------------------------------------
 
+/** The collector line as printed on the card: Classic Collection reprints print their original one. */
+function printedNumber(card: CardPrinting): [num: string | undefined, total: string | undefined] {
+  const classic = classicPrintedNumber(card.key);
+  if (classic) return [classic.number, classic.total || undefined];
+  const [num, total] = card.number.split('/');
+  return [num, total];
+}
+
 /**
  * Does the printed set code (or promo prefix) read off the card name this card's set? 1 / 0, or
  * undefined when nothing usable was read: a code no known set has (misread, or a set newer than
- * the table) only counts when it agrees.
+ * the table) only counts when it agrees, and a promo code read beside a set size is a misread
+ * set code (promos print no size), so it counts for nothing.
  */
 function setAgreement(card: CardPrinting, hints: ScanHints): number | undefined {
   const promo = promoSet(hints);
-  if (promo) return setIdOf(card.key) === promo ? 1 : 0;
+  if (promo) return promoCodeDoubtful(hints) ? undefined : setIdOf(card.key) === promo ? 1 : 0;
   // AI scan names the expansion from its symbol; OCR never sets this.
   if (!hints.setCode) return hints.setName ? (namesSet(card, hints.setName) ? 1 : 0) : undefined;
   const same = normalize(card.setCode) === normalize(hints.setCode);
@@ -196,35 +205,80 @@ function setAgreement(card: CardPrinting, hints: ScanHints): number | undefined 
   return same || named.some((s) => s.id === setIdOf(card.key)) ? 1 : 0;
 }
 
-/** Set size agreement. Promos print no size, so a size read off the card counts against them. */
+/**
+ * Set size agreement: 1 / 0, or 0.5 for a size one digit away from the printed one (a misread
+ * that happens to name another set holding the same Pokémon at that number must not bury the
+ * right card). Promos print no size, so a size read off the card counts against them.
+ */
 function totalAgreement(card: CardPrinting, hints: ScanHints): number | undefined {
   if (!hints.total) return undefined;
-  const total = card.number.split('/')[1];
-  if (total !== undefined) return sameTotal(total, hints.total) ? 1 : 0;
+  const [, total] = printedNumber(card);
+  if (total !== undefined) {
+    if (sameTotal(total, hints.total)) return 1;
+    const printed = totalDigits(total);
+    return printed && levenshtein(printed, totalDigits(hints.total)) === 1 ? 0.5 : 0;
+  }
   // Unknown size (a brand-new set's partial result): leave it out rather than count it wrong.
   return pokemonSet(setIdOf(card.key)) ? 0 : undefined;
 }
 
+/**
+ * 0–1 name agreement. The mark of a special printing ("ex", "V", "GX"…) is small, stylised foil
+ * that OCR usually cannot see, so the name without it, read as a whole word, costs only a
+ * little: the plain and the ex printing then end up close, and the photo (the ex art is
+ * different) decides between them. Whole words only, or "Mew ex" would read "Mewtwo" as its own.
+ */
+function nameTerm(cardName: string, text: string): number {
+  const full = partialSimilarity(cardName, text);
+  const base = cardName.replace(NAME_SUFFIX, '');
+  if (full === 1 || base === cardName) return full;
+  return ` ${normalize(text)} `.includes(` ${normalize(base)} `) ? Math.max(full, 0.97) : full;
+}
+
+function numberAgrees(card: CardPrinting, hints: ScanHints): boolean | undefined {
+  if (!hints.number) return undefined;
+  const [num] = printedNumber(card);
+  return !!num && sameCollectorNumber(num, hints.number);
+}
+
 function score(card: CardPrinting, hints: ScanHints): number {
-  const [num] = card.number.split('/');
   const nameText = hints.nameText || hints.name;
+  const number = numberAgrees(card, hints);
   return weightedScore([
-    [0.5, nameText ? partialSimilarity(card.name, nameText) : undefined],
-    [0.35, hints.number ? (sameCollectorNumber(num ?? '', hints.number) ? 1 : 0) : undefined],
+    [0.5, nameText ? nameTerm(card.name, nameText) : undefined],
+    [0.35, number === undefined ? undefined : number ? 1 : 0],
     [0.1, totalAgreement(card, hints)],
     // A set code is printed on Scarlet & Violet cards onwards.
     [0.15, setAgreement(card, hints)],
   ]);
 }
 
+/** Which of the scan's signals this printing agrees with, for `isConfident`. */
+function signals(card: CardPrinting, hints: ScanHints): Candidate['signals'] {
+  const nameText = hints.nameText || hints.name;
+  const [, total] = printedNumber(card);
+  const setRead = !!(hints.total || hints.setCode || hints.setName);
+  return {
+    name: nameText ? nameTerm(card.name, nameText) : undefined,
+    number: numberAgrees(card, hints),
+    set: setRead ? (!!hints.total && sameTotal(total, hints.total)) || setAgreement(card, hints) === 1 : undefined,
+  };
+}
+
 async function lookupDex(hints: ScanHints): Promise<CardPrinting[]> {
   const jobs: Array<Promise<CardPrinting[]>> = [];
   const promo = promoSet(hints);
+  // A promo code read beside a set size ("SVP EN 005/198") is a misread set code: look the
+  // number up in the sets of that size as well, without the code.
+  const doubtful = promoCodeDoubtful(hints);
   if (hints.number && promo) jobs.push(dexPromo(promo, hints.number));
-  else if (hints.number && (totalDigits(hints.total) || numberPrefix(hints.number) || hints.setCode)) jobs.push(dexByNumber(hints.number, hints.total, hints.setCode, hints.setName));
-  // Search on each plausible name word. OCR often adds a stray letter ("Pikachuz"), and TCGdex
-  // matches substrings, so long words are searched by their first six letters.
-  const words = [...new Set([hints.name ? longestWord(hints.name) : '', ...(hints.nameCandidates ?? [])].filter((w) => w.length >= 4))];
+  if (hints.number && (!promo || doubtful) && (totalDigits(hints.total) || numberPrefix(hints.number) || hints.setCode)) {
+    jobs.push(dexByNumber(hints.number, hints.total, doubtful ? undefined : hints.setCode, hints.setName));
+  }
+  // Search on each plausible name word (three letters is a name: Mew, Muk). OCR often adds a
+  // stray letter ("Pikachuz"), and TCGdex matches substrings, so long words are searched by
+  // their first six letters.
+  const words = [...new Set([hints.name ? longestWord(hints.name) : '', ...(hints.nameCandidates ?? [])].filter((w) => w.length >= 3))];
   for (const w of words.slice(0, 3)) jobs.push(dexByName(w.length > 6 ? w.slice(0, 6) : w, hints.number));
   const settled = await Promise.allSettled(jobs);
   const failed = settled.find((r): r is PromiseRejectedResult => r.status === 'rejected');
@@ -353,10 +407,13 @@ function longestWord(name: string): string {
     .sort((a, b) => b.length - a.length)[0] ?? name;
 }
 
-/** The number was read and agrees, and so does the set size or the printed set code / promo prefix. */
+/**
+ * The number was read and agrees, and so does the set size or the printed set code / promo
+ * prefix. Strict: a size that only matches after a one-digit repair is not an exact read.
+ */
 function exactId(card: CardPrinting, hints: ScanHints): boolean {
-  const [num, total] = card.number.split('/');
-  if (!hints.number || !num || !sameCollectorNumber(num, hints.number)) return false;
+  const [, total] = printedNumber(card);
+  if (!numberAgrees(card, hints)) return false;
   return (!!hints.total && sameTotal(total, hints.total)) || setAgreement(card, hints) === 1;
 }
 
@@ -371,7 +428,7 @@ export const pokemon: Game = {
 
   async identify(hints) {
     const cards = await lookup(hints);
-    return rank(cards.map((card): Candidate => ({ card, score: score(card, hints) })));
+    return rank(cards.map((card): Candidate => ({ card, score: score(card, hints), signals: signals(card, hints) })));
   },
 
   async complete(card) {

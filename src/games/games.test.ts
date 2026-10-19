@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { parsePokemon } from '../scan/parse';
+import type { Candidate, CardPrinting } from '../types';
 import { isConfident } from './game';
 import { clearHttpCache } from './http';
 import { lorcana } from './lorcana';
@@ -44,6 +46,21 @@ afterEach(() => {
   vi.unstubAllGlobals();
   clearHttpCache();
 });
+
+// The photo matcher, for the resolve() tests: likeness per catalog picture, 0.05 for the rest.
+const VISUAL = vi.hoisted(() => new Map<string, number>());
+vi.mock('../scan/vision', () => ({
+  PhotoMatcher: class {
+    async compare(url: string | undefined): Promise<number | undefined> {
+      if (!url) return undefined;
+      const key = url.replace('https://assets.example/', '').replace('/low.webp', '');
+      return VISUAL.has(key) ? VISUAL.get(key) : 0.05;
+    }
+  },
+  hasGlare: () => false,
+  shimmer: () => 0,
+  reverseProbability: () => 0,
+}));
 
 describe('pokemon.identify', () => {
   it('finds a card by number + set total and ranks by name', async () => {
@@ -644,5 +661,181 @@ describe('ptcgTwin set matching', () => {
     const full = await pokemon.complete(partial('base1-50', 'Gastly', 'Base Set', '50/102'));
     expect(full.prices).toEqual({ '1st Edition': 1.5, Unlimited: 0.3 });
     expect(full.variants).toEqual(['Unlimited', '1st Edition']);
+  });
+});
+
+describe('isConfident: two agreeing signals', () => {
+  const printing = (key: string, name: string, number: string): CardPrinting => ({ game: 'pokemon', key, name, setName: 's', setCode: 's', number, variants: [], details: {}, source: 'test' });
+  const cand = (key: string, name: string, number: string, score: number, signals?: Candidate['signals'], visual?: number): Candidate => ({ card: printing(key, name, number), score, signals, visual });
+  const read = { name: 1, number: true, set: true };
+
+  it('adds on name + number + set alone when no same-name neighbour is in the running', () => {
+    expect(isConfident([cand('a-25', 'Pikachu', '25/198', 1, read), cand('b-25', 'Snorlax', '25/198', 0.6, { name: 0.2, number: true, set: true })])).toBe(true);
+    // A reprint with the same line, or the same name one digit away: only the photo can tell.
+    expect(isConfident([cand('a-25', 'Pikachu', '25/198', 1, read), cand('b-25', 'Pikachu', '25/198', 0.9, read)])).toBe(false);
+    expect(isConfident([cand('a-26', 'Pikachu', '26/198', 1, read), cand('a-25', 'Pikachu ex', '25/198', 0.68, { name: 1, number: false, set: true })])).toBe(false);
+    expect(isConfident([cand('a-26', 'Pikachu', '26/198', 0.97, read, 0.9), cand('a-25', 'Pikachu ex', '25/198', 0.5, { name: 1, number: false, set: true }, 0.1)])).toBe(true);
+    // The size disagrees (misread, or another set's card): not on text alone.
+    expect(isConfident([cand('b-26', 'Gyarados', '26/123', 0.9, { name: 1, number: true, set: false }), cand('a-26', 'Gyarados EX', '26/122', 0.8, { name: 0.97, number: false, set: true })])).toBe(false);
+    // A fuzzy name hit on another Pokémon ("Cinccino" for Minccino) is not a sure name, and a
+    // neighbour whose name reads as well ("Porygon-Z" at 0.95 for a Porygon read) needs the photo.
+    expect(isConfident([cand('a-153', 'Cinccino', '153/86', 0.94, { name: 0.875, number: true, set: true }), cand('a-152', 'Minccino', '152/86', 0.68, { name: 1, number: false, set: true })])).toBe(false);
+    expect(isConfident([cand('a-155', 'Porygon-Z', '155/182', 0.976, { name: 0.95, number: true, set: true }), cand('a-153', 'Porygon', '153/182', 0.68, { name: 1, number: false, set: true })])).toBe(false);
+    expect(isConfident([cand('a-155', 'Porygon-Z', '155/182', 0.976, { name: 0.95, number: true, set: true }), cand('a-153', 'Porygon', '153/182', 0.68, { name: 1, number: false, set: true })].map((c, i) => ({ ...c, visual: i ? 0.1 : 0.8 })))).toBe(true);
+  });
+
+  it('needs the photo when the name strip was empty, and a better photo for a name alone', () => {
+    const numberOnly = { number: true, set: true };
+    expect(isConfident([cand('a-68', 'Pachirisu', '68/198', 0.802, numberOnly, 0.34)])).toBe(false);
+    expect(isConfident([cand('a-68', 'Pachirisu', '68/198', 0.85, numberOnly, 0.5)])).toBe(false);
+    expect(isConfident([cand('a-68', 'Pachirisu', '68/198', 0.88, numberOnly, 0.6)])).toBe(true);
+    expect(isConfident([cand('a-68', 'Pachirisu', '68/198', 0.805, numberOnly)])).toBe(false);
+    const nameOnly = { name: 0.9 };
+    expect(isConfident([cand('a-1', 'Joltik', '45/114', 0.9, nameOnly, 0.95), cand('b-1', 'Joltik', '70/202', 0.75, nameOnly, 0.3)])).toBe(true);
+    expect(isConfident([cand('a-1', 'Joltik', '45/114', 0.82, nameOnly, 0.4), cand('b-1', 'Joltik', '70/202', 0.72, nameOnly, 0.1)])).toBe(false);
+    expect(isConfident([cand('a-1', 'Joltik', '45/114', 1, nameOnly)])).toBe(false);
+  });
+
+  it('never lets a card without a picture win over one the photo confirmed', () => {
+    expect(isConfident([cand('dp7-76', 'Stunky', '76/100', 0.9, read), cand('dp5-76', 'Stunky', '76/100', 0.8, read, 0.7)])).toBe(false);
+    expect(isConfident([cand('a-26', 'Pikachu', '26/198', 0.95, read, 0.3), cand('a-25', 'Pikachu', '25/198', 0.8, { name: 1, number: false, set: true }, 0.8)])).toBe(false);
+  });
+
+  it('judges games without signals on the score alone', () => {
+    expect(isConfident([cand('LOB-EN005', 'Dark Magician', 'LOB-EN005', 0.95), cand('SDY-006', 'Dark Magician', 'SDY-006', 0.6)])).toBe(true);
+    expect(isConfident([cand('a', 'X', '1', 0.85), cand('b', 'X', '2', 0.8)])).toBe(false);
+  });
+});
+
+describe('lookups that survive one OCR slip', () => {
+  const dex = (id: string, localId: string, name: string, set: { id: string; name: string; official: number }, image = `https://assets.example/${id}`) => ({
+    id, localId, name, image, rarity: 'Common', category: 'Pokemon', variants: { normal: true }, set: { id: set.id, name: set.name, cardCount: { official: set.official, total: set.official } }, pricing: null,
+  });
+  const brief = (id: string, localId: string, name: string) => ({ id, localId, name, image: `https://assets.example/${id}` });
+  const bw1 = { id: 'bw1', name: 'Black & White', official: 114 };
+  const sv1 = { id: 'sv01', name: 'Scarlet & Violet', official: 198 };
+  const sets = [{ id: 'bw1', name: 'Black & White', cardCount: { official: 114, total: 115 } }, { id: 'sv01', name: 'Scarlet & Violet', cardCount: { official: 198, total: 258 } }, { id: 'svp', name: 'SVP Black Star Promos', cardCount: { official: 0, total: 200 } }, { id: 'base1', name: 'Base Set', cardCount: { official: 102, total: 102 } }, { id: 'cel25cc', name: 'Celebrations Classic Collection', cardCount: { official: 25, total: 25 } }];
+
+  it('keeps the same-name card one digit away when the number was misread, and does not add the neighbour on text alone', async () => {
+    stubFetch([
+      [/tcgdex\.net\/v2\/en\/sets$/, sets],
+      [/sets\/bw1\/2$/, dex('bw1-2', '2', 'Snivy', bw1)],
+      [/cards\?name=Snivy/, [brief('bw1-1', '1', 'Snivy'), brief('bw1-2', '2', 'Snivy'), brief('xy1-1', '1', 'Snivy'), brief('sv09-050', '050', 'Snivy')]],
+    ]);
+    const hints = parsePokemon({ name: 'BASIC Snivy HP 60', bottom: '2/114' });
+    const res = await pokemon.identify(hints);
+    expect(res.map((c) => c.card.key)).toEqual(['bw1-2', 'bw1-1', 'xy1-1']);
+    expect(res[0]!.score).toBe(1);
+    expect(res[1]!.score).toBeCloseTo(0.63, 2); // name and size agree, number not; no code on BW cards
+    expect(res[1]!.signals).toEqual({ name: 1, number: false, set: true });
+    expect(pokemon.exactId(res[1]!.card, hints)).toBe(false);
+    expect(isConfident(res)).toBe(false);
+  });
+
+  it('scores a name read without its ex/V/GX mark almost as high, and three-letter names are searched', async () => {
+    const seen = stubFetch([[/tcgdex\.net\/v2\/en\/sets$/, sets], [/cards\?name=Mew/, [brief('sv03.5-151', '151', 'Mew ex'), brief('sv03.5-053', '053', 'Mewtwo')]]]);
+    const hints = { name: 'Mew', nameText: 'BASIC Mew HP 180', nameCandidates: [] as string[] };
+    const res = await pokemon.identify(hints);
+    expect(seen.some((u) => u.includes('cards?name=Mew'))).toBe(true);
+    expect(res[0]!.card.key).toBe('sv03.5-151');
+    expect(res[0]!.score).toBeCloseTo(0.97, 2);
+    expect(pokemon.score(res[1]!.card, hints)).toBeLessThan(0.7);
+    expect(isConfident(res)).toBe(false);
+  });
+
+  it('looks a set code read as the promo code up by size as well, and counts the code for nothing', async () => {
+    stubFetch([
+      [/tcgdex\.net\/v2\/en\/sets$/, sets],
+      [/sets\/svp\/005$/, dex('svp-005', '005', 'Quaquaval', { id: 'svp', name: 'SVP Black Star Promos', official: 0 })],
+      [/sets\/sv01\/005$/, dex('sv01-005', '005', 'Cacnea', sv1)],
+    ]);
+    const hints = parsePokemon({ name: '', bottom: 'H SVP EN 005/198' });
+    expect(hints).toMatchObject({ number: '005', total: '198', setCode: 'SVP' });
+    const res = await pokemon.identify(hints);
+    expect(res.map((c) => c.card.key)).toEqual(['sv01-005', 'svp-005']);
+    expect(res[0]!.score).toBe(1);
+    expect(isConfident(res)).toBe(false);
+    // A real promo, no size printed: the promo set alone, as before.
+    const promo = await pokemon.identify(parsePokemon({ name: '', bottom: 'G SVP EN 005' }));
+    expect(promo.map((c) => c.card.key)).toEqual(['svp-005']);
+  });
+
+  it('reaches a Classic Collection reprint by the original line it prints, tied with the original', async () => {
+    stubFetch([
+      [/tcgdex\.net\/v2\/en\/sets$/, sets],
+      [/sets\/base1\/4$/, dex('base1-4', '4', 'Charizard', { id: 'base1', name: 'Base Set', official: 102 })],
+      [/sets\/cel25cc\/CC002$/, dex('cel25cc-CC002', 'CC002', 'Charizard', { id: 'cel25cc', name: 'Celebrations Classic Collection', official: 25 })],
+      [/cards\?name=Charizard/, []],
+    ]);
+    const hints = parsePokemon({ name: 'STAGE 2 Charizard HP 120', bottom: '4/102' });
+    const res = await pokemon.identify(hints);
+    expect(res.map((c) => c.card.key).sort()).toEqual(['base1-4', 'cel25cc-CC002']);
+    expect(res.map((c) => c.score)).toEqual([1, 1]);
+    expect(res.every((c) => pokemon.exactId(c.card, hints))).toBe(true);
+    expect(isConfident(res)).toBe(false);
+    expect((await pokemon.search('charizard 4/102')).map((c) => c.key)).toContain('cel25cc-CC002');
+  });
+
+  it('repairs a set size no set prints, without treating it as an exact read', async () => {
+    const seen = stubFetch([[/tcgdex\.net\/v2\/en\/sets$/, sets], [/sets\/sv01\/063$/, dex('sv01-063', '063', 'Pachirisu', sv1)]]);
+    const hints = parsePokemon({ name: '', bottom: '063/190' }); // no set has 190 cards
+    const res = await pokemon.identify(hints);
+    expect(seen.some((u) => u.endsWith('/sets/sv01/063'))).toBe(true);
+    expect(res[0]!.card.key).toBe('sv01-063');
+    expect(pokemon.exactId(res[0]!.card, hints)).toBe(false);
+    expect(isConfident(res)).toBe(false);
+  });
+
+  it('gives a size one digit off half credit so the right set stays close', async () => {
+    const hints = { name: 'Gyarados', nameText: 'BASIC Gyarados HP 130', number: '26', total: '123' };
+    const right = pokemon.score({ ...dexPrinting('xy9-26', 'Gyarados EX', '26/122') }, hints);
+    const wrong = pokemon.score({ ...dexPrinting('dp2-26', 'Gyarados', '26/123') }, hints);
+    expect(wrong).toBe(1);
+    expect(right).toBeGreaterThan(0.9);
+  });
+
+  function dexPrinting(key: string, name: string, number: string): CardPrinting {
+    return { game: 'pokemon', key, name, setName: 's', setCode: 's', number, variants: [], details: {}, source: 'tcgdex' };
+  }
+});
+
+describe('resolve(): the photo against candidates with and without a picture', () => {
+  const canvas = {} as HTMLCanvasElement;
+  const dex = (id: string, localId: string, name: string, set: { id: string; name: string; official: number }, image?: string) => ({
+    id, localId, name, image, rarity: 'Common', category: 'Pokemon', variants: { normal: true }, set: { id: set.id, name: set.name, cardCount: { official: set.official, total: set.official } }, pricing: null,
+  });
+  const dp5 = { id: 'dp5', name: 'Majestic Dawn', official: 100 };
+  const dp7 = { id: 'dp7', name: 'Stormfront', official: 100 };
+  const sets = [{ id: 'dp5', name: 'Majestic Dawn', cardCount: { official: 100, total: 100 } }, { id: 'dp7', name: 'Stormfront', cardCount: { official: 100, total: 100 } }, { id: 'sv01', name: 'Scarlet & Violet', cardCount: { official: 198, total: 258 } }];
+
+  it('ranks the printing the photo confirmed above a same-line reprint whose picture is missing', async () => {
+    const { resolve } = await import('../scan/recognize');
+    stubFetch([
+      [/tcgdex\.net\/v2\/en\/sets$/, sets],
+      [/sets\/dp5\/76$/, dex('dp5-76', '76', 'Stunky', dp5, 'https://assets.example/dp5-76')],
+      [/sets\/dp7\/76$/, dex('dp7-76', '76', 'Stunky', dp7)],
+      [/cards\?name=Stunky/, []],
+    ]);
+    VISUAL.clear();
+    VISUAL.set('dp5-76', 0.7);
+    const out = await resolve('pokemon', parsePokemon({ name: 'BASIC Stunky HP 60', bottom: '76/100' }), canvas);
+    expect(out.map((c) => [c.card.key, c.visual])).toEqual([['dp5-76', 0.7], ['dp7-76', undefined]]);
+    expect(out[0]!.score).toBeCloseTo(0.91, 2);
+    expect(out[1]!.score).toBeCloseTo(0.805, 3);
+  });
+
+  it('does not add a card whose number was read one digit off on an unverified picture', async () => {
+    const { resolve } = await import('../scan/recognize');
+    const sv1 = { id: 'sv01', name: 'Scarlet & Violet', official: 198 };
+    for (const [image, visual, confident] of [[undefined, undefined, false], ['https://assets.example/sv01-068', 0.5, false], ['https://assets.example/sv01-068', 0.8, true]] as const) {
+      stubFetch([[/tcgdex\.net\/v2\/en\/sets$/, sets], [/sets\/sv01\/068$/, dex('sv01-068', '068', 'Pachirisu', sv1, image)]]);
+      clearHttpCache();
+      VISUAL.clear();
+      if (visual !== undefined) VISUAL.set('sv01-068', visual);
+      const out = await resolve('pokemon', parsePokemon({ name: '', bottom: 'H SVI EN 068/198' }), canvas);
+      expect(out[0]!.card.key).toBe('sv01-068');
+      expect(out[0]!.visual).toBe(visual);
+      expect(isConfident(out)).toBe(confident);
+    }
   });
 });
