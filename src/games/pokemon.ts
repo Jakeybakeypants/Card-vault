@@ -242,15 +242,14 @@ function numberAgrees(card: CardPrinting, hints: ScanHints): boolean | undefined
 }
 
 /**
- * How well the printing's name matches what was read: the isolated name first (the raw strip
- * also carries "Evolves from Kadabra", which must not make Kadabra a full match), with the raw
- * strip as a lesser fallback in case the wrong word was isolated.
+ * How well the printing's name matches what was read: the better of the isolated name and the
+ * whole name strip (minus the pre-evolution's name, see parsePokemon). The strip keeps a name
+ * the isolation got wrong; the isolated name keeps one the strip garbles around it.
  */
 function nameMatch(card: CardPrinting, hints: ScanHints): number | undefined {
-  if (!hints.name && !hints.nameText) return undefined;
-  const isolated = hints.name ? nameTerm(card.name, hints.name) : 0;
-  const strip = hints.nameText && hints.nameText !== hints.name ? nameTerm(card.name, hints.nameText) - 0.15 : 0;
-  return Math.max(isolated, strip);
+  const texts = [hints.name, hints.nameText].filter((t): t is string => !!t);
+  if (!texts.length) return undefined;
+  return Math.max(...texts.map((t) => nameTerm(card.name, t)));
 }
 
 function score(card: CardPrinting, hints: ScanHints): number {

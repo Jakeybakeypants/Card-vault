@@ -360,7 +360,9 @@ export function parsePokemon(raw: Record<string, string>): ScanHints {
     }
   }
 
-  hints.nameText = top;
+  // The strip is matched against candidate names as a whole: the pre-evolution named on it
+  // ("Evolves from Kadabra") must not read as a match for that card.
+  hints.nameText = withoutEvolutionText(top);
   hints.nameCandidates = nameCandidates(top, POKEMON_NAME_NOISE);
   hints.name = guessName(top, POKEMON_NAME_NOISE) ?? hints.nameCandidates[0];
   const category = pokemonCategory(top);
@@ -372,6 +374,15 @@ export function parsePokemon(raw: Record<string, string>): ScanHints {
 // the Stage 1 card" (the words after the name are the pre-evolution's stage).
 const EVOLVES_FROM = /\b[Ee]vol?ve[sd]?\s+fr[oa]m\s+\S+/g;
 const PUT_ON = /\bPut\s+\S+\s+on\b.*$/;
+
+/** The name strip without the lines' evolution notes, which name another card. */
+export function withoutEvolutionText(strip: string): string {
+  return strip
+    .split('\n')
+    .map((line) => line.replace(EVOLVES_FROM, ' ').replace(PUT_ON, ' ').replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .join('\n');
+}
 // Small print "HP" and its digits as OCR renders them: "60HP", "HP 60", "w90", "wl30", "Jw140",
 // "JOHP", "SO HP", "n150", "+140". Names never carry digits, so a short run of letters glued to
 // digits is always this.

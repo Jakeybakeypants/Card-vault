@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fixSetCode, mergeSecondLook, nameCandidates, parseLorcana, parseMtg, parsePokemon, parseYugioh, plausibleNumber, pokemonCategory } from './parse';
+import { fixSetCode, mergeSecondLook, nameCandidates, parseLorcana, parseMtg, parsePokemon, parseYugioh, plausibleNumber, pokemonCategory, withoutEvolutionText } from './parse';
 import { partialSimilarity, sameCollectorNumber, stripLeadingZeros } from '../util/text';
 
 describe('parsePokemon', () => {
@@ -370,5 +370,15 @@ describe('second look plausibility gate (P1)', () => {
     expect(mergeSecondLook({ number: 'V156', total: '202' }, { number: '156', total: '202' })).toEqual({ number: '156', total: '202' });
     expect(mergeSecondLook({}, { number: '9', total: '102' })).toEqual({ number: '9', total: '102' });
     expect(mergeSecondLook({ number: '9', total: '102' }, {})).toEqual({ number: '9', total: '102' });
+  });
+});
+
+describe('name strip without the pre-evolution', () => {
+  it('keeps the card name and drops "Evolves from" / "Put … on" notes from nameText', () => {
+    const h = parsePokemon({ name: 'Evolves from Weedle Put Kakuna on the Basic Pokemon\nSTAGE |\n) Kakuna 80 HP ©', bottom: '33/102' });
+    expect(h.name).toBe('Kakuna');
+    expect(h.nameText).not.toMatch(/Weedle/);
+    expect(h.nameText).toMatch(/Kakuna/);
+    expect(withoutEvolutionText('Evolves from Kadabra\nAlakazam 80 HP')).toBe('Alakazam 80 HP');
   });
 });
