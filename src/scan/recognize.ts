@@ -3,6 +3,7 @@ import { rank } from '../games/game';
 import type { Candidate, CardPrinting, GameId, ScanHints } from '../types';
 import { readCardWithClaude } from './ai';
 import { ocrRegion, ocrRegions, rereadWord, type OcrResult } from './ocr';
+import { mergeSecondLook, POKEMON_NAME_LOWER } from './parse';
 import { hasGlare, PhotoMatcher, reverseProbability, shimmer } from './vision';
 
 export interface Recognition {
@@ -31,27 +32,49 @@ export async function readWithOcr(game: GameId, card: HTMLCanvasElement): Promis
   let results = await ocrRegions(card, g.regions);
   const texts = (rs: Record<string, OcrResult>): Record<string, string> => Object.fromEntries(Object.entries(rs).map(([k, v]) => [k, v.text]));
   let hints = g.parse(texts(results));
+  // Everything that was read, including the re-reads that were not used, for the scan report.
+  const raw: Record<string, string> = { ...hints.raw };
+  const hasName = (h: ScanHints): boolean => !!h.name || !!h.nameCandidates?.length;
   // No number/code found: the print may be light-on-dark (full arts, ex cards, Pendulum
   // boxes). Re-read the identifier strips inverted and keep whatever that adds.
   if (!hasId(hints)) {
     const inverted = { ...results };
-    for (const r of g.regions.filter((r) => r.key !== 'name')) inverted[r.key] = await ocrRegion(card, r, true);
+    for (const r of g.regions.filter((r) => r.key !== 'name')) {
+      inverted[r.key] = await ocrRegion(card, r, true);
+      raw[`${r.key} (inverted)`] = inverted[r.key]!.text;
+    }
     const retry = g.parse(texts(inverted));
     if (hasId(retry)) {
-      hints = { ...retry, name: hints.name ?? retry.name, nameText: hints.nameText, nameCandidates: hints.nameCandidates };
+      hints = { ...retry, name: hints.name ?? retry.name, nameText: hints.nameText, nameCandidates: hints.nameCandidates, category: hints.category };
       results = inverted;
+    }
+  }
+  const nameRegion = g.regions.find((r) => r.key === 'name');
+  // Trainer and Energy names sit under their TRAINER / ENERGY banner, below the strip that holds
+  // a Pokémon's name. When the strip shows such a label, or no name at all, read the next strip
+  // down; under a label its name is the better one.
+  if (game === 'pokemon' && (hints.category || !hasName(hints))) {
+    const lower = await ocrRegion(card, POKEMON_NAME_LOWER);
+    raw['name (lower)'] = lower.text;
+    const retry = g.parse({ ...texts(results), name: lower.text });
+    if (hasName(retry)) {
+      const [first, second] = hints.category ? [retry, hints] : [hints, retry];
+      hints = {
+        ...hints,
+        name: first.name ?? second.name,
+        nameText: [hints.nameText, retry.nameText].filter(Boolean).join('\n'),
+        nameCandidates: [...new Set([...(first.nameCandidates ?? []), ...(second.nameCandidates ?? [])])].slice(0, 4),
+        category: hints.category ?? retry.category,
+      };
     }
   }
   // No name either: on full arts, special illustration rares and gold cards the name is light
   // text over the artwork. Re-read the name strip inverted.
-  const nameRegion = g.regions.find((r) => r.key === 'name');
-  if (nameRegion && !hints.name && !hints.nameCandidates?.length) {
+  if (nameRegion && !hasName(hints)) {
     const invertedName = await ocrRegion(card, nameRegion, true);
+    raw['name (inverted)'] = invertedName.text;
     const retry = g.parse({ ...texts(results), name: invertedName.text });
-    if (retry.name || retry.nameCandidates?.length) {
-      hints = { ...hints, name: retry.name, nameText: retry.nameText, nameCandidates: retry.nameCandidates };
-      hints.raw = { ...hints.raw, 'name (inverted)': invertedName.text };
-    }
+    if (hasName(retry)) hints = { ...hints, name: retry.name, nameText: retry.nameText, nameCandidates: retry.nameCandidates, category: hints.category ?? retry.category };
   }
   // Second look at the word that holds the collector number / set code.
   const spec = ID_WORD[game];
@@ -61,15 +84,22 @@ export async function readWithOcr(game: GameId, card: HTMLCanvasElement): Promis
     if (!res || !word) continue;
     const reread = await rereadWord(res.image, word, spec.whitelist);
     const closer = g.parse({ ...texts(results), [key]: reread });
-    if ((game === 'pokemon' || game === 'mtg' || game === 'lorcana') && closer.number) {
+    if (game === 'pokemon') {
+      // The close read sees the glyphs beside the number too: only taken when it is at least as
+      // plausible as the strip read.
+      const merged = mergeSecondLook(hints, closer, reread);
+      hints.number = merged.number;
+      hints.total = merged.total;
+    } else if ((game === 'mtg' || game === 'lorcana') && closer.number) {
       hints.number = closer.number;
       hints.total = closer.total;
     } else if (game === 'yugioh' && closer.setCode) {
       hints.setCode = closer.setCode;
     }
-    hints.raw = { ...hints.raw, [`${key} (second look)`]: reread };
+    raw[`${key} (second look)`] = reread;
     break;
   }
+  hints.raw = raw;
   hints.glare = hasGlare(card, g.regions);
   return hints;
 }
@@ -115,6 +145,7 @@ export function mergeHints(reads: ScanHints[]): ScanHints {
     passcode: vote('passcode'),
     variant: vote('variant'),
     language: vote('language'),
+    category: vote('category'),
     glare: last?.glare,
     raw: last?.raw,
   };
