@@ -234,9 +234,11 @@ function nameTerm(cardName: string, text: string, read = text): number {
   if (full === 1 || base === cardName) return full;
   const plain = (s: string): string => normalize(s.replace(/['’]/g, ''));
   const b = plain(base);
-  // The base name must cover what was read, not be one word of a longer name: "Team Rockets
-  // Mewtwo" is not "Mewtwo ex".
-  const covers = ` ${plain(text)} `.includes(` ${b} `) && b.length >= 0.6 * plain(read).length;
+  // The base name must be what was read, give or take a garbled mark behind it ("Zeraora Vemz"
+  // for Zeraora VSTAR), not one word of a longer name: "Team Rockets Mewtwo" is not "Mewtwo ex".
+  const squeeze = (s: string): string => s.replace(/ /g, '');
+  const whole = ` ${plain(text)} `.includes(` ${b} `);
+  const covers = whole && (squeeze(plain(read)).startsWith(squeeze(b)) || b.length >= 0.6 * plain(read).length);
   return covers ? Math.max(full, 0.97) : full;
 }
 

@@ -798,6 +798,16 @@ describe('lookups that survive one OCR slip', () => {
     for (const c of res.slice(1)) expect(c.score).toBeLessThan(0.9);
   });
 
+  it('keeps the suffix tolerance when the mark behind the name was garbled', () => {
+    const hints = (name: string) => ({ name, nameText: `BASIC ${name} HP 280`, nameCandidates: [] as string[] });
+    expect(pokemon.score(dexPrinting('swsh12.5-055', 'Zeraora VSTAR', '055/159'), hints('Zeraora Vemz'))).toBeCloseTo(0.97, 2);
+    expect(pokemon.score(dexPrinting('swsh9-014', 'Shaymin VSTAR', '014/172'), hints('Shaymin Vezi'))).toBeCloseTo(0.97, 2);
+    expect(pokemon.score(dexPrinting('swsh12.5-025', 'Mew VMAX', '025/159'), hints('Mew Vemz'))).toBeCloseTo(0.97, 2);
+    // A longer name that merely contains the base name is another card.
+    expect(pokemon.score(dexPrinting('sv04-058', 'Mewtwo ex', '058/182'), hints('Team Rockets Mewtwo'))).toBeLessThan(0.9);
+    expect(pokemon.score(dexPrinting('sv03.5-006', 'Charizard ex', '006/165'), hints('Mega Charizard Y ex'))).toBeLessThan(0.95);
+  });
+
   it('keeps every printing of a name when the read number matches none of them exactly', async () => {
     const { dexByName } = await import('./tcgdex');
     stubFetch([[/tcgdex\.net\/v2\/en\/sets$/, sets], [/cards\?name=Aron/, [brief('ex1-49', '49', 'Aron'), brief('ex1-50', '50', 'Aron'), brief('ex1-59', '59', 'Aron'), brief('sv06-123', '123', 'Aron')]]]);
