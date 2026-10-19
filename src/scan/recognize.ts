@@ -134,15 +134,20 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (x: T) => Promise<R
   return out;
 }
 
+/** Likeness assumed for a catalog picture that could not be compared: a little below doubtful. */
+const NO_PICTURE = 0.35;
+
 /**
  * Text agreement first; the photo comparison breaks ties between printings and catches misreads.
- * When the full number was read exactly and the picture also matches, that settles it even if
- * the name was unreadable (foil behind the name, glare on the title).
+ * A picture that could not be compared (missing, failed to load) counts as a neutral, slightly
+ * doubtful likeness, so an imageless candidate never outranks one the photo confirmed and
+ * never gets the exact-match boost. When the full number was read exactly and the picture also
+ * matches, that settles it even if the name was unreadable (foil behind the name, glare on the
+ * title).
  */
 function combined(text: number, visual: number | undefined, exact = false): number {
-  if (visual === undefined) return text;
-  const blend = 0.7 * text + 0.3 * visual;
-  return exact && visual >= 0.75 ? Math.max(blend, 0.8 + 0.15 * visual) : blend;
+  const blend = 0.7 * text + 0.3 * (visual ?? NO_PICTURE);
+  return exact && visual !== undefined && visual >= 0.75 ? Math.max(blend, 0.8 + 0.15 * visual) : blend;
 }
 
 /**
