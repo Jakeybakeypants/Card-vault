@@ -62,13 +62,6 @@ function toDigits(s: string): string {
   return s.replace(/[^0-9]/g, (c) => DIGIT_FIXES[c] ?? c);
 }
 
-declare module '../types' {
-  interface ScanHints {
-    /** Pokémon: the card type a label on the name strip gave away (TRAINER / ITEM / SUPPORTER / ENERGY…). */
-    category?: 'trainer' | 'energy';
-  }
-}
-
 // Subset prefixes printed in front of collector numbers: Trainer Gallery, Galarian Gallery,
 // Radiant Collection, Shiny Vault, Shiny (Hidden Fates), Classic Collection, and Holo (Crystal
 // Guardians era: H1–H12, never more than two digits).

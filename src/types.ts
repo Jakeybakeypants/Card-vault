@@ -65,6 +65,8 @@ export interface ScanHints {
   nameText?: string;
   /** Other plausible name words from the name strip, most likely first, to search on as well. */
   nameCandidates?: string[];
+  /** Pokémon: the card type a label on the name strip gave away (TRAINER / ITEM / SUPPORTER / ENERGY…). */
+  category?: 'trainer' | 'energy';
   /** Pokémon: collector number without the total (`25`, `TG05`, `SWSH050`). */
   number?: string;
   /** Pokémon: printed set total (`198`). */

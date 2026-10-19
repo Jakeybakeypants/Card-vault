@@ -59,7 +59,8 @@ vi.mock('../scan/vision', () => ({
   },
   hasGlare: () => false,
   shimmer: () => 0,
-  reverseProbability: () => 0,
+  // Flat print ≈ 0.04, reverse-holo speckle ≈ 0.96: the real curve's ends, without calibration.
+  reverseProbability: (v: number) => (v >= 0.18 ? 0.96 : 0.04),
 }));
 
 describe('pokemon.identify', () => {

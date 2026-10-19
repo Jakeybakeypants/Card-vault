@@ -241,11 +241,22 @@ function numberAgrees(card: CardPrinting, hints: ScanHints): boolean | undefined
   return !!num && sameCollectorNumber(num, hints.number);
 }
 
+/**
+ * How well the printing's name matches what was read: the isolated name first (the raw strip
+ * also carries "Evolves from Kadabra", which must not make Kadabra a full match), with the raw
+ * strip as a lesser fallback in case the wrong word was isolated.
+ */
+function nameMatch(card: CardPrinting, hints: ScanHints): number | undefined {
+  if (!hints.name && !hints.nameText) return undefined;
+  const isolated = hints.name ? nameTerm(card.name, hints.name) : 0;
+  const strip = hints.nameText && hints.nameText !== hints.name ? nameTerm(card.name, hints.nameText) - 0.15 : 0;
+  return Math.max(isolated, strip);
+}
+
 function score(card: CardPrinting, hints: ScanHints): number {
-  const nameText = hints.nameText || hints.name;
   const number = numberAgrees(card, hints);
   return weightedScore([
-    [0.5, nameText ? nameTerm(card.name, nameText) : undefined],
+    [0.5, nameMatch(card, hints)],
     [0.35, number === undefined ? undefined : number ? 1 : 0],
     [0.1, totalAgreement(card, hints)],
     // A set code is printed on Scarlet & Violet cards onwards.
@@ -255,11 +266,10 @@ function score(card: CardPrinting, hints: ScanHints): number {
 
 /** Which of the scan's signals this printing agrees with, for `isConfident`. */
 function signals(card: CardPrinting, hints: ScanHints): Candidate['signals'] {
-  const nameText = hints.nameText || hints.name;
   const [, total] = printedNumber(card);
   const setRead = !!(hints.total || hints.setCode || hints.setName);
   return {
-    name: nameText ? nameTerm(card.name, nameText) : undefined,
+    name: nameMatch(card, hints),
     number: numberAgrees(card, hints),
     set: setRead ? (!!hints.total && sameTotal(total, hints.total)) || setAgreement(card, hints) === 1 : undefined,
   };
