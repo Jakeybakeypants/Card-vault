@@ -257,11 +257,21 @@ function nameMatch(card: CardPrinting, hints: ScanHints): number | undefined {
   return Math.max(...texts.map((t) => nameTerm(card.name, t, hints.name ?? t)));
 }
 
+/** 1 for the read number, 0.5 one OCR slip away ("063" for "068"), 0 otherwise. */
+function numberAgreement(card: CardPrinting, hints: ScanHints): number | undefined {
+  if (!hints.number) return undefined;
+  const [num] = printedNumber(card);
+  if (!num) return 0;
+  if (sameCollectorNumber(num, hints.number)) return 1;
+  // Below an exact match, above the rest of the name's printings: a misread digit keeps the
+  // right card in the photo's pool when the name has hundreds of printings.
+  return levenshtein(stripLeadingZeros(num).toUpperCase(), stripLeadingZeros(hints.number).toUpperCase()) === 1 ? 0.5 : 0;
+}
+
 function score(card: CardPrinting, hints: ScanHints): number {
-  const number = numberAgrees(card, hints);
   return weightedScore([
     [0.5, nameMatch(card, hints)],
-    [0.35, number === undefined ? undefined : number ? 1 : 0],
+    [0.35, numberAgreement(card, hints)],
     [0.1, totalAgreement(card, hints)],
     // A set code is printed on Scarlet & Violet cards onwards.
     [0.15, setAgreement(card, hints)],

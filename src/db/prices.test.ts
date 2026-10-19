@@ -54,11 +54,12 @@ describe('mergePrices', () => {
 
   it('never replaces a recent TCGplayer price with a fallback-source price', () => {
     const cm = card({ prices: { Normal: 0.5, 'Reverse Holofoil': 0.9 }, priceSource: 'Cardmarket trend ≈ €0.45 (converted at $1.10/€)', pricesUpdatedAt: ago(0) });
-    const merged = mergePrices(card(), cm);
+    const saved = card();
+    const merged = mergePrices(saved, cm);
     expect(merged.prices).toEqual({ Normal: 0.12, 'Reverse Holofoil': 0.33 });
     expect(merged.priceSource).toBe(DEX);
     // The saved date is kept too, so the refresh tries again tomorrow.
-    expect(merged.pricesUpdatedAt).toBe(card().pricesUpdatedAt);
+    expect(merged.pricesUpdatedAt).toBe(saved.pricesUpdatedAt);
   });
 
   it('accepts the fallback once the TCGplayer price is two weeks old, and a better source at once', () => {

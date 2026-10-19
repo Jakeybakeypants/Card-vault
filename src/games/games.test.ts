@@ -771,7 +771,7 @@ describe('lookups that survive one OCR slip', () => {
     const res = await pokemon.identify(hints);
     expect(res.map((c) => c.card.key)).toEqual(['bw1-2', 'bw1-1', 'xy1-1']);
     expect(res[0]!.score).toBe(1);
-    expect(res[1]!.score).toBeCloseTo(0.63, 2); // name and size agree, number not; no code on BW cards
+    expect(res[1]!.score).toBeCloseTo(0.82, 2); // name and size agree, number one digit off; no code on BW cards
     expect(res[1]!.signals).toEqual({ name: 1, number: false, set: true });
     expect(pokemon.exactId(res[1]!.card, hints)).toBe(false);
     expect(isConfident(res)).toBe(false);
@@ -870,6 +870,16 @@ describe('lookups that survive one OCR slip', () => {
     expect(res[0]!.card.key).toBe('sv01-063');
     expect(pokemon.exactId(res[0]!.card, hints)).toBe(false);
     expect(isConfident(res)).toBe(false);
+  });
+
+  it('gives a number one digit off half credit so the right printing stays in the photo pool', () => {
+    const hints = { name: 'Pikachu', nameText: 'BASIC Pikachu HP 60', number: '026', total: '198' };
+    const exact = pokemon.score(dexPrinting('sv01-026', 'Pikachu', '026/198'), hints);
+    const near = pokemon.score(dexPrinting('sv01-025', 'Pikachu', '025/198'), hints);
+    const far = pokemon.score(dexPrinting('sv01-091', 'Pikachu', '091/198'), hints);
+    expect(exact).toBe(1);
+    expect(near).toBeLessThan(exact - 0.08);
+    expect(far).toBeLessThan(near - 0.08);
   });
 
   it('gives a size one digit off half credit so the right set stays close', async () => {
