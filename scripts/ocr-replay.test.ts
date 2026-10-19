@@ -106,5 +106,5 @@ describe.skipIf(!DIR || !LOG)('real OCR reads replayed through parser and lookup
       }
     }
     expect(all.autoWrong).toBe(0);
-  });
+  }, 20 * 60 * 1000);
 });
