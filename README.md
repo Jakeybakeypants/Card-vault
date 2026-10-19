@@ -37,13 +37,23 @@ which still works over plain HTTP.
      `123/269` on 2015–2019 cards).
    - **Lorcana**: the name and version banner, plus `12/204 • EN • 1` bottom-left (number / set
      size, language, set).
+   Trainer and Energy names sit under their banner, so when the strip shows TRAINER / ITEM /
+   SUPPORTER / ENERGY, or no name at all, the next strip down is read too. The collector number
+   gets a second, closer look, and what it reads is only taken when it is a number a set could
+   print (a 4-digit "size" or a glued letter is an OCR slip, not a card).
 3. It looks those up in the card database and ranks the matches, comparing your photo against each
    match's catalog picture. That's how it tells apart printings with the same name, and how it still
-   finds the card when glare hides the number.
+   finds the card when glare hides the number. A misread digit does not lose the card: printings
+   of the same name one digit away stay in the list for the photo to decide, and a size no set
+   prints is repaired to the nearest one.
    One tap reads up to four frames in a row, keeping whatever each frame got right, and says so when
    glare is the problem.
-4. **One clear match** (number + set + name agree): the card is added immediately, with an
-   **Undo** toast, and the camera stays ready for the next card.
+4. **One clear match**: the card is added immediately, with an **Undo** toast, and the camera
+   stays ready for the next card. That takes two independent signals that agree: the name and
+   the collector number with the photo on their side (or the set as well, when no card one
+   digit away is in the running), or the number and set confirmed by the photo, or the name
+   confirmed by the photo. A card whose catalog picture could not be compared never wins over
+   one the photo confirmed.
    **Several possible matches** (for example, only the name was readable): you get a short
    list with pictures to pick from.
 
@@ -93,6 +103,14 @@ the Collection tab, or on demand with **Update prices**. Prices are TCGplayer ma
 one ungraded copy. Yu-Gi-Oh! prices don't distinguish 1st Edition from Unlimited, because the
 source doesn't.
 
+A price always belongs to the finish you own: a Reverse Holofoil copy of a card that TCGplayer
+only lists as Normal shows no price (the sheet names the finish that is priced) rather than a
+neighbour's. Wizards-era cards are priced and labelled as **Unlimited** / **1st Edition**, and the
+shadowless and jumbo printings TCGplayer files separately never stand in for the plain card.
+The detail sheet shows TCGplayer's own price date next to when the app last checked. A refresh
+merges finish by finish: a finish that drops out of the listing keeps its last price, and a
+fallback source never replaces a TCGplayer price less than two weeks old.
+
 TCGdex has no TCGplayer price for the Pokémon subsets TCGplayer files as separate groups
 (Trainer Gallery, Galarian Gallery, Shiny Vault, Classic Collection, Radiant Collection and a
 few others). For those the app takes the same card's TCGplayer price from pokemontcg.io, and
@@ -129,7 +147,7 @@ Collection tab you can:
 | Glare, foil shimmer, photo-vs-catalog matching | `src/scan/vision.ts` |
 | AI reader | `src/scan/ai.ts` |
 | Scan → candidates | `src/scan/recognize.ts` |
-| Catalogs | `src/games/tcgdex.ts`, `pokemon.ts`, `yugioh.ts`, `mtg.ts`, `lorcana.ts`, ranking in `src/games/game.ts` |
+| Catalogs | `src/games/tcgdex.ts`, `pokemon.ts`, `yugioh.ts`, `mtg.ts`, `lorcana.ts`, ranking and the auto-add rule in `src/games/game.ts` |
 | Pokémon set table (codes, sizes, dates) | `src/games/pokemonSets.ts` (generated), `src/games/pokemonSetIndex.ts` |
 | Scan reports | `src/scan/scanLog.ts` |
 | Set completion (binder) | `src/db/progress.ts` (pure, unit-tested), `src/ui/binderView.ts` |
@@ -144,16 +162,22 @@ binder), plus its entry in `src/games/index.ts` and its artwork / text-box regio
 ## Checking Pokémon lookups against the whole catalog
 
 `scripts/pokemon-eval.test.ts` replays the text printed on thousands of real cards (every kind:
-secret rares, Trainer/Galarian Gallery, Shiny Vault, promos) through the parser and lookup
-against a local copy of the TCGdex catalog, and reports how often the right printing comes out
-on top, with the name and number read, the number only, or the name only. The same checkout
-regenerates the set table:
+secret rares, Trainer/Galarian Gallery, Shiny Vault, Classic Collection, promos) through the
+parser and lookup against a local copy of the TCGdex catalog, and reports how often the right
+printing comes out on top, with the name and number read, the number only, the name only, a
+digit of the number or size misread, or the name without its ex/V/GX mark. It also counts the
+cards that would be added without asking on text alone, and how many of those would be wrong
+(must be none). `scripts/ocr-replay.test.ts` does the same for what OCR actually read on real
+photos: point `OCR_LOG` at a results file with one JSON object per scan holding `dexId`,
+`condition`, `kind` and the `hints.raw` strips the app recorded (the catalog fake both use is
+`scripts/tcgdexFake.ts`). The same checkout regenerates the set table:
 
 ```bash
 git clone --depth 1 --filter=blob:none --sparse https://github.com/tcgdex/cards-database ../cards-database
 (cd ../cards-database && git sparse-checkout set --no-cone '/data/*/*.ts' '/data/Scarlet & Violet/' '/data/Mega Evolution/' '/data/Sword & Shield/' '/data/Sun & Moon/')
 node scripts/gen-pokemon-sets.mjs ../cards-database
 TCGDEX_DIR=../cards-database EVAL_OUT=eval.txt npx vitest run scripts/pokemon-eval.test.ts
+OCR_LOG=scans.jsonl TCGDEX_DIR=../cards-database REPLAY_OUT=replay.txt npx vitest run scripts/ocr-replay.test.ts
 ```
 
 ## Roadmap
