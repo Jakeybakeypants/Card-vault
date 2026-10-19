@@ -27,6 +27,10 @@ type DexTcgplayer = ({ updated?: string | null; unit?: string | null } & Record<
 /** One printing of the card (finish, stamp, special foil) with its own marketplace ids and prices. */
 interface DexVariantDetailed {
   type?: string;
+  /** `unlimited`, `shadowless`, `1999-2000-copyright`, `no-e-reader`…: WotC-era print runs sold as separate products. */
+  subtype?: string;
+  /** `standard` or `jumbo`. */
+  size?: string;
   stamp?: string[];
   foil?: string;
   thirdParty?: { tcgplayer?: number; cardmarket?: number };
@@ -83,21 +87,47 @@ const PRICE_LABELS: Record<string, string> = {
   'unlimited-holofoil': 'Unlimited Holofoil',
 };
 
-/** Plain finishes only: stamped (prerelease, staff…) and special-foil printings sell for different prices. */
+/**
+ * Plain printings only: stamped (prerelease, staff…), special-foil, jumbo and WotC-era oddity
+ * printings (shadowless, no-e-reader, copyright misprints…) are separate TCGplayer products that
+ * sell for different prices. `unlimited` is the plain print run of a set that also had a 1st Edition.
+ */
 function plainVariants(card: DexCard): DexVariantDetailed[] {
-  return (card.variants_detailed ?? []).filter((v) => !v.stamp?.length && !v.foil);
+  return (card.variants_detailed ?? []).filter((v) => !v.stamp?.length && !v.foil && v.size !== 'jumbo' && (!v.subtype || v.subtype === 'unlimited'));
+}
+
+const productIdsOf = (tp: DexTcgplayer): number[] =>
+  Object.values(tp ?? {})
+    .map((v) => (v && typeof v === 'object' ? (v as DexTcgplayerPrinting).productId : undefined))
+    .filter((id): id is number => typeof id === 'number');
+
+/**
+ * TCGplayer's price lists for the card's plain printings. The card-level list is "the first
+ * printing that has prices", which for a Base Set card can be the shadowless or jumbo product: it
+ * is left out when a plain printing exists and it belongs to one of the other printings.
+ */
+function plainPriceLists(card: DexCard): DexTcgplayer[] {
+  const plain = plainVariants(card);
+  const lists = plain.map((v) => v.pricing?.tcgplayer ?? null);
+  const root = card.pricing?.tcgplayer ?? null;
+  if (!root) return lists;
+  const plainIds = new Set(plain.map((v) => v.thirdParty?.tcgplayer));
+  const otherIds = new Set((card.variants_detailed ?? []).filter((v) => !plain.includes(v)).map((v) => v.thirdParty?.tcgplayer));
+  const ids = productIdsOf(root);
+  const foreign = plain.length > 0 && ids.length > 0 && ids.every((id) => otherIds.has(id) && !plainIds.has(id));
+  return foreign ? lists : [root, ...lists];
 }
 
 /**
  * TCGplayer market price per finish. The card-level prices cover one TCGplayer product; finishes
  * sold as separate products carry their own under `variants_detailed`, so those fill the gaps.
+ * `updated` is TCGplayer's own price date (can be days behind the fetch).
  */
 export function dexPrices(card: DexCard): { prices: Record<string, number>; productId?: number; updated?: string } {
   const prices: Record<string, number> = {};
   let productId: number | undefined;
   let updated: string | undefined;
-  const sources = [card.pricing?.tcgplayer, ...plainVariants(card).map((v) => v.pricing?.tcgplayer)];
-  for (const tp of sources) {
+  for (const tp of plainPriceLists(card)) {
     if (!tp) continue;
     updated ??= tp.updated ?? undefined;
     for (const [key, value] of Object.entries(tp)) {
@@ -118,18 +148,26 @@ export function dexPrices(card: DexCard): { prices: Record<string, number>; prod
 /**
  * The finishes this card was printed in, most likely first. The catalog's flags say which exist;
  * TCGplayer's listings win where they disagree (some cards are flagged `normal` but only ever sold
- * as holofoil).
+ * as holofoil). WotC-era products are priced as "Unlimited" / "1st Edition" rather than "Normal" /
+ * "Holofoil": the plain finish then takes the Unlimited label, so the first chip is the priced
+ * one and the same physical card is never offered twice.
  */
 export function dexVariants(card: DexCard, priced: string[]): string[] {
   const f = card.variants ?? {};
+  const N = priced.includes('Unlimited') ? 'Unlimited' : 'Normal';
+  const H = priced.includes('Unlimited Holofoil') ? 'Unlimited Holofoil' : 'Holofoil';
   const out: string[] = [];
-  const base = priced.includes('Holofoil') || (f.holo && !f.normal) ? 'Holofoil' : f.normal || priced.includes('Normal') ? 'Normal' : f.holo ? 'Holofoil' : undefined;
+  const base = priced.includes(H) || (f.holo && !f.normal) ? H : f.normal || priced.includes(N) ? N : f.holo ? H : undefined;
   if (base) out.push(base);
-  if (f.holo && base !== 'Holofoil') out.push('Holofoil');
-  if (f.normal && base !== 'Normal') out.push('Normal');
+  if (f.holo && base !== H) out.push(H);
+  if (f.normal && base !== N) out.push(N);
   if (f.reverse || priced.includes('Reverse Holofoil')) out.push('Reverse Holofoil');
-  if (f.firstEdition) out.push(out[0] === 'Holofoil' ? '1st Edition Holofoil' : '1st Edition');
-  for (const p of priced) if (!out.includes(p)) out.push(p);
+  if (f.firstEdition) out.push(out[0] === H ? '1st Edition Holofoil' : '1st Edition');
+  // "Normal" / "Holofoil" next to "Unlimited" / "Unlimited Holofoil" would be the same card twice.
+  const hidden = new Set<string>();
+  if (N !== 'Normal') hidden.add('Normal');
+  if (H !== 'Holofoil') hidden.add('Holofoil');
+  for (const p of priced) if (!out.includes(p) && !hidden.has(p)) out.push(p);
   return out.length ? out : ['Normal', 'Holofoil', 'Reverse Holofoil'];
 }
 
@@ -144,8 +182,14 @@ function setFacts(setId: string): { name?: string; code?: string; releaseDate?: 
   return s ? { name: s.name, code: s.code ? s.code.split(':')[0] : undefined, releaseDate: s.releaseDate, official: s.official || undefined } : {};
 }
 
+/** "TCGplayer market (via TCGdex, prices of 2026-10-12)": the source and its own price date. */
+export function dexPriceSource(updated: string | undefined): string {
+  const day = updated ? /^\d{4}-\d{2}-\d{2}/.exec(updated)?.[0] : undefined;
+  return day ? `TCGplayer market (via TCGdex, prices of ${day})` : 'TCGplayer market (via TCGdex)';
+}
+
 export function fromDex(c: DexCard): CardPrinting {
-  const { prices, productId } = dexPrices(c);
+  const { prices, productId, updated } = dexPrices(c);
   const priced = Object.keys(prices);
   const details: Record<string, string> = {};
   if (c.hp) details.HP = String(c.hp);
@@ -165,8 +209,8 @@ export function fromDex(c: DexCard): CardPrinting {
     image: c.image ? `${c.image}/low.webp` : undefined,
     imageLarge: c.image ? `${c.image}/high.webp` : undefined,
     prices: priced.length ? prices : undefined,
-    priceSource: priced.length ? 'TCGplayer market (via TCGdex)' : undefined,
-    // When we fetched them: drives the daily refresh. TCGdex's own `updated` can be days old.
+    priceSource: priced.length ? dexPriceSource(updated) : undefined,
+    // When we fetched them: drives the daily refresh. TCGplayer's own date is in the source note.
     pricesUpdatedAt: priced.length ? new Date().toISOString() : undefined,
     variants: dexVariants(c, priced),
     releaseDate: facts.releaseDate,

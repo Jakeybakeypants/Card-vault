@@ -1,5 +1,5 @@
 import { ALL_VARIANTS, GAMES } from '../games';
-import { addCard, deleteEntry, entryValue, imageUrl, unitPrice, updateEntry } from '../db/store';
+import { addCard, deleteEntry, entryValue, imageUrl, otherPrice, unitPrice, updateEntry } from '../db/store';
 import { guessFinish, type Recognition } from '../scan/recognize';
 import { shareScanReport } from '../scan/scanLog';
 import { learnFinish } from '../scan/vision';
@@ -95,7 +95,7 @@ export async function openAddSheet(partialCard: CardPrinting, opts: AddOptions =
   const priceEl = h('div', { class: 'big-price' });
   const updatePrice = (): void => {
     const p = unitPrice(card, variant);
-    clear(priceEl, p !== undefined ? [money(p), h('small', null, ` each · ${variant}`)] : h('small', null, `No price for ${variant}`));
+    clear(priceEl, p !== undefined ? [money(p), h('small', null, ` each · ${variant}`)] : h('small', null, noPriceText(card, variant)));
   };
   updatePrice();
   const pick = (v: string): void => {
@@ -150,10 +150,28 @@ function linkLabel(url: string): string {
   return site ? `View on ${site[1]} ↗` : 'View online ↗';
 }
 
+/**
+ * "No Reverse Holofoil price · Holofoil $9": the finish has no price of its own, and what the
+ * catalog does have is named for what it is. Never another finish's price shown as this one's.
+ */
+export function noPriceText(card: CardPrinting, variant: string): string {
+  const other = otherPrice(card, variant);
+  return other ? `No ${variant} price · ${other.finish} ${money(other.value)}` : `No price for ${variant}`;
+}
+
+/**
+ * Where the prices came from and when: the source names its own price date when it has one
+ * ("prices of 2026-10-12"); the second date is when the app last checked. A printing the catalog
+ * has no marketplace price for says so instead of nothing.
+ */
 export function priceNote(card: CardPrinting): HTMLElement | false {
-  if (!card.priceSource) return false;
+  if (!card.priceSource) {
+    // A partial result that couldn't be completed: prices unknown rather than absent.
+    if (card.partial) return false;
+    return h('div', { class: 'muted small' }, 'No market price in the catalog for this printing');
+  }
   const when = card.pricesUpdatedAt ? new Date(card.pricesUpdatedAt) : undefined;
-  return h('div', { class: 'muted small' }, card.priceSource, when && !Number.isNaN(when.getTime()) ? ` · ${when.toLocaleDateString()}` : '');
+  return h('div', { class: 'muted small' }, card.priceSource, when && !Number.isNaN(when.getTime()) ? ` · checked ${when.toLocaleDateString()}` : '');
 }
 
 /**
@@ -278,7 +296,7 @@ export function openEntrySheet(entry: CollectionEntry): void {
   const valueEl = h('div', { class: 'big-price' });
   const renderValue = (): void => {
     const v = entryValue(current);
-    clear(valueEl, money(v), v !== undefined && h('small', null, ` total · ${money(unitPrice(card, current.variant))} each`));
+    clear(valueEl, v !== undefined ? [money(v), h('small', null, ` total · ${money(unitPrice(card, current.variant))} each`)] : h('small', null, noPriceText(card, current.variant)));
   };
   const save = async (patch: Parameters<typeof updateEntry>[1]): Promise<void> => {
     current = await updateEntry(current, patch);

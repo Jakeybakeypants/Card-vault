@@ -1,13 +1,52 @@
 import { GAMES } from '../games';
-import type { CollectionEntry } from '../types';
-import { listEntries, putEntries } from './store';
+import type { CardPrinting, CollectionEntry } from '../types';
+import { listEntries, putEntries, sameFinish } from './store';
 
 const DAY = 24 * 60 * 60 * 1000;
+/** A saved TCGplayer price younger than this beats a fallback-source price fetched today. */
+const KEEP_MARKET_PRICE_MS = 14 * DAY;
 let running: Promise<number> | null = null;
 
+function ageMs(card: CardPrinting): number {
+  const t = card.pricesUpdatedAt ? Date.parse(card.pricesUpdatedAt) : NaN;
+  return Number.isNaN(t) ? Infinity : Date.now() - t;
+}
+
 function stale(e: CollectionEntry, maxAgeMs: number): boolean {
-  const t = e.card.pricesUpdatedAt ? Date.parse(e.card.pricesUpdatedAt) : NaN;
-  return Number.isNaN(t) || Date.now() - t > maxAgeMs;
+  return ageMs(e.card) > maxAgeMs;
+}
+
+/**
+ * How good a price source is: the marketplace the app quotes (TCGplayer market, via the primary
+ * catalog) ranks above the same marketplace via a fallback catalog, which ranks above another
+ * marketplace's price converted from EUR (Cardmarket).
+ */
+export function sourceRank(source: string | undefined): number {
+  if (!source) return 0;
+  if (/cardmarket/i.test(source)) return 1;
+  if (/pokemontcg\.io/i.test(source)) return 2;
+  return 3;
+}
+
+/**
+ * The saved card with today's prices merged in, finish by finish:
+ * - no fresh price at all (between sales, source down): keep what we had;
+ * - a fallback source while the saved TCGplayer price is recent: keep the saved prices too,
+ *   so a day without TCGplayer data doesn't swap every finish to a converted Cardmarket figure;
+ * - the same source: a finish the fresh list lacks keeps its last price (never a neighbour's);
+ * - a better source than before: its prices replace the old ones wholesale.
+ */
+export function mergePrices(saved: CardPrinting, fresh: CardPrinting): CardPrinting {
+  const keepSaved = { ...fresh, prices: saved.prices, priceSource: saved.priceSource, pricesUpdatedAt: saved.pricesUpdatedAt, url: saved.url ?? fresh.url };
+  if (!fresh.prices) return keepSaved;
+  if (!saved.prices) return fresh;
+  const was = sourceRank(saved.priceSource);
+  const now = sourceRank(fresh.priceSource);
+  if (now < was) return ageMs(saved) <= KEEP_MARKET_PRICE_MS ? keepSaved : fresh;
+  if (now > was) return fresh;
+  const current = Object.keys(fresh.prices);
+  const kept = Object.fromEntries(Object.entries(saved.prices).filter(([finish]) => !current.some((f) => sameFinish(finish, f))));
+  return { ...fresh, prices: { ...kept, ...fresh.prices } };
 }
 
 /**
@@ -34,11 +73,8 @@ export function refreshPrices(opts: { maxAgeMs?: number; onProgress?: (done: num
         const card = group[0]!.card;
         const fresh = await GAMES[card.game].refresh(card).catch(() => null);
         if (fresh) {
-          // Keep the saved identity; take the new facts and prices. No price today (between
-          // sales, source down) keeps the last known one rather than wiping it.
-          const priced = fresh.prices
-            ? fresh
-            : { ...fresh, prices: card.prices, priceSource: card.priceSource, pricesUpdatedAt: card.pricesUpdatedAt, url: card.url ?? fresh.url };
+          // Keep the saved identity; take the new facts and merge the prices per finish.
+          const priced = mergePrices(card, fresh);
           const checked = { ...priced, key: card.key, partial: undefined, pricesUpdatedAt: priced.pricesUpdatedAt ?? new Date().toISOString() };
           for (const e of group) updated.push({ ...e, card: checked });
         }

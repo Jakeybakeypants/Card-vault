@@ -188,11 +188,48 @@ export async function imageUrl(card: CardPrinting): Promise<string | undefined> 
 // ---------------------------------------------------------------------------------------------
 // Value
 
+/**
+ * Finish labels that name the same physical card: a WotC-era set's "Unlimited" print run is its
+ * plain (non-1st Edition) card, which older saves and the pokemontcg.io fallback call "Normal".
+ */
+const SAME_FINISH: Record<string, string> = {
+  Normal: 'Unlimited',
+  Unlimited: 'Normal',
+  Holofoil: 'Unlimited Holofoil',
+  'Unlimited Holofoil': 'Holofoil',
+};
+
+/** The two labels name the same physical card (`Normal` and `Unlimited`, or the same label). */
+export function sameFinish(a: string, b: string): boolean {
+  return a === b || SAME_FINISH[a] === b;
+}
+
+/**
+ * Market price of one copy in exactly this finish (`default` prices every finish, as Yu-Gi-Oh!
+ * sources do). Never another finish's price: a reverse holo with only a holofoil listing has no
+ * price rather than the wrong one. `otherPrice` says what the catalog does have.
+ */
 export function unitPrice(card: CardPrinting, variant: string): number | undefined {
   const p = card.prices;
   if (!p) return undefined;
-  const values = Object.values(p);
-  return p[variant] ?? p.default ?? (values.length === 1 ? values[0] : undefined);
+  const twin = SAME_FINISH[variant];
+  return p[variant] ?? (twin !== undefined ? p[twin] : undefined) ?? p.default;
+}
+
+/**
+ * When `variant` itself has no price: the price the catalog does have, with whose finish it is,
+ * so the UI can say "Holofoil $9 · no Reverse Holofoil price". The card's base finish first.
+ */
+export function otherPrice(card: CardPrinting, variant: string): { finish: string; value: number } | undefined {
+  const p = card.prices;
+  if (!p || unitPrice(card, variant) !== undefined) return undefined;
+  const order = [...card.variants, ...Object.keys(p)];
+  for (const finish of order) {
+    if (finish === variant || finish === SAME_FINISH[variant] || finish === 'default') continue;
+    const value = p[finish];
+    if (value !== undefined) return { finish, value };
+  }
+  return undefined;
 }
 
 export function entryValue(e: CollectionEntry): number | undefined {

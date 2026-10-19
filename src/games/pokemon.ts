@@ -47,13 +47,13 @@ const VARIANT_LABELS: Record<string, string> = {
   unlimited: 'Unlimited',
   '1stEdition': '1st Edition',
 };
-export const POKEMON_VARIANTS = ['Normal', 'Holofoil', 'Reverse Holofoil', '1st Edition', '1st Edition Holofoil', 'Unlimited Holofoil'];
+export const POKEMON_VARIANTS = ['Normal', 'Holofoil', 'Reverse Holofoil', '1st Edition', '1st Edition Holofoil', 'Unlimited', 'Unlimited Holofoil'];
 
 function fromPtcg(c: PtcgCard): CardPrinting {
   const prices: Record<string, number> = {};
   for (const [k, p] of Object.entries(c.tcgplayer?.prices ?? {})) {
     const v = p?.market ?? p?.mid;
-    if (v != null) prices[VARIANT_LABELS[k] ?? k] = v;
+    if (v != null && v > 0) prices[VARIANT_LABELS[k] ?? k] = v;
   }
   const priced = Object.keys(prices);
   const details: Record<string, string> = {};
@@ -75,7 +75,7 @@ function fromPtcg(c: PtcgCard): CardPrinting {
     prices: priced.length ? prices : undefined,
     priceSource: priced.length ? 'TCGplayer market (via pokemontcg.io)' : undefined,
     pricesUpdatedAt: priced.length ? new Date().toISOString() : undefined,
-    variants: priced.length ? priced : defaultVariants(c.rarity),
+    variants: ptcgVariants(priced, c.rarity),
     releaseDate: c.set.releaseDate?.replace(/\//g, '-'),
     url: c.tcgplayer?.url,
     details,
@@ -83,8 +83,30 @@ function fromPtcg(c: PtcgCard): CardPrinting {
   };
 }
 
+const holoRarity = (rarity?: string): boolean => /holo|rare|ex|gx|v\b|vmax|vstar/i.test(rarity ?? '');
+
 function defaultVariants(rarity?: string): string[] {
-  return /holo|rare|ex|gx|v\b|vmax|vstar/i.test(rarity ?? '') ? ['Holofoil', 'Reverse Holofoil', 'Normal'] : ['Normal', 'Reverse Holofoil', 'Holofoil'];
+  return holoRarity(rarity) ? ['Holofoil', 'Reverse Holofoil', 'Normal'] : ['Normal', 'Reverse Holofoil', 'Holofoil'];
+}
+
+/**
+ * Finishes for a pokemontcg.io card, ordered like `dexVariants`: the plain finish first (holofoil
+ * when that is what TCGplayer sells, or the rarity says so), then reverse holo, then 1st Edition.
+ * TCGplayer's price keys alone would list whatever happens to be priced, in its order: a card
+ * priced only as reverse holo still exists as Normal, and a WotC-era card priced as "1st Edition
+ * Holofoil" / "Unlimited Holofoil" must default to Unlimited, not the stamped printing.
+ */
+export function ptcgVariants(priced: string[], rarity?: string): string[] {
+  const wotc = priced.some((p) => p.startsWith('Unlimited') || p.startsWith('1st Edition'));
+  const pool = new Set(wotc ? priced : [...priced, ...defaultVariants(rarity)]);
+  const N = pool.has('Unlimited') ? 'Unlimited' : 'Normal';
+  const H = pool.has('Unlimited Holofoil') ? 'Unlimited Holofoil' : 'Holofoil';
+  // Never both "Normal" and "Unlimited": they are the same physical card.
+  if (N !== 'Normal') pool.delete('Normal');
+  if (H !== 'Holofoil') pool.delete('Holofoil');
+  const holoFirst = priced.includes(H) || (!priced.includes(N) && holoRarity(rarity));
+  const order = holoFirst ? [H, N, 'Reverse Holofoil', '1st Edition Holofoil', '1st Edition'] : [N, H, 'Reverse Holofoil', '1st Edition', '1st Edition Holofoil'];
+  return [...order.filter((v) => pool.has(v)), ...[...pool].filter((v) => !order.includes(v))];
 }
 
 function ptcgHeaders(): Record<string, string> | undefined {
@@ -247,15 +269,32 @@ async function lookup(hints: ScanHints): Promise<CardPrinting[]> {
 // galleries and vaults (Trainer Gallery, Galarian Gallery, Shiny Vault, Classic Collection…) are
 // separate groups it doesn't fetch, so those cards come back unpriced.
 
-/** The same printing on pokemontcg.io: same number and name, matched to the set by name or size. */
+/** TCGdex set ids that pokemontcg.io spells differently. */
+const PTCG_SET_IDS: Record<string, string[]> = { cel25cc: ['cel25c'], '30th': ['me55'], '30th-c': ['me55c'], 'sv10.5b': ['zsv10pt5'], 'sv10.5w': ['rsv10pt5'] };
+
+/**
+ * The pokemontcg.io ids a TCGdex set id can correspond to: `sv01` → `sv1`, `sv03.5` → `sv3pt5`,
+ * `sm3.5` → `sm35`, `swsh12.5gg` → `swsh12pt5gg`; most older ids are spelled the same.
+ */
+export function ptcgSetIds(dexSetId: string): string[] {
+  const special = PTCG_SET_IDS[dexSetId];
+  if (special) return special;
+  const m = /^(sv|me)0*(\d.*)$/.exec(dexSetId);
+  const base = m ? `${m[1]}${m[2]}` : dexSetId;
+  return [...new Set([base, base.replace('.', 'pt'), base.replace('.', '')])];
+}
+
+/**
+ * The same printing on pokemontcg.io: same number and name, in the same set (by id, or by exact
+ * name). A card from a set pokemontcg.io doesn't have gets no twin rather than another set's price.
+ */
 async function ptcgTwin(card: CardPrinting): Promise<CardPrinting | null> {
-  const [num, official] = card.number.split('/');
+  const [num] = card.number.split('/');
   const name = card.name.replace(/["\\]/g, '');
+  const setId = setIdOf(card.key);
+  const ids = card.source === 'tcgdex' ? ptcgSetIds(setId) : [setId];
   const found = await ptcgQuery(`${numberClause(num!)} name:"${name}"`, 20);
-  const pick =
-    found.find((c) => normalize(c.set.name) === normalize(card.setName)) ??
-    (official ? found.find((c) => String(c.set.printedTotal) === official) : undefined) ??
-    (found.length === 1 ? found[0] : undefined);
+  const pick = found.find((c) => ids.includes(c.set.id)) ?? found.find((c) => normalize(c.set.name) === normalize(card.setName));
   return pick ? fromPtcg(pick) : null;
 }
 
@@ -281,12 +320,27 @@ async function cardmarketPrices(card: CardPrinting, cm: DexCardmarket | undefine
   };
 }
 
+/** Finish chips named after what is priced: "Normal" reads "Unlimited" when that is the listing. */
+function relabelFinishes(variants: string[], prices: Record<string, number>): string[] {
+  const map: Record<string, string> = {};
+  if ('Unlimited' in prices && !('Normal' in prices)) map.Normal = 'Unlimited';
+  if ('Unlimited Holofoil' in prices && !('Holofoil' in prices)) map.Holofoil = 'Unlimited Holofoil';
+  return [...new Set(variants.map((v) => map[v] ?? v))];
+}
+
 /** TCGplayer via TCGdex, else TCGplayer via pokemontcg.io, else Cardmarket converted to USD. */
 async function withFallbackPrices(card: CardPrinting, cardmarket?: DexCardmarket): Promise<CardPrinting> {
   if (card.prices) return card;
   const twin = await ptcgTwin(card).catch(() => null);
   if (twin?.prices) {
-    return { ...card, prices: twin.prices, priceSource: twin.priceSource, pricesUpdatedAt: twin.pricesUpdatedAt, url: card.url?.includes('tcgplayer') ? card.url : (twin.url ?? card.url) };
+    return {
+      ...card,
+      prices: twin.prices,
+      priceSource: twin.priceSource,
+      pricesUpdatedAt: twin.pricesUpdatedAt,
+      variants: relabelFinishes(card.variants, twin.prices),
+      url: card.url?.includes('tcgplayer') ? card.url : (twin.url ?? card.url),
+    };
   }
   const cm = await cardmarketPrices(card, cardmarket).catch(() => null);
   return cm ? { ...card, ...cm } : card;
