@@ -416,3 +416,233 @@ describe('TCGdex per-finish products', () => {
     expect(card.url).toBe('https://www.tcgplayer.com/product/262345');
   });
 });
+
+describe('WotC-era prices and finishes (TCGdex)', () => {
+  // Base Set Gastly as the API serves it: the Unlimited product (42394) is priced "1st-edition" /
+  // "unlimited"; the shadowless product (107047) is a separate listing priced "1st-edition" / "normal".
+  const gastly = {
+    id: 'base1-50',
+    localId: '50',
+    name: 'Gastly',
+    rarity: 'Common',
+    category: 'Pokemon',
+    variants: { normal: true, holo: false, reverse: false, firstEdition: true },
+    set: { id: 'base1', name: 'Base Set', cardCount: { official: 102, total: 102 } },
+    pricing: { tcgplayer: { unit: 'USD', updated: '2026-10-12T00:00:00Z', '1st-edition': { productId: 42394, marketPrice: 1.5 }, unlimited: { productId: 42394, marketPrice: 0.3 } } },
+    variants_detailed: [
+      { type: 'normal', subtype: 'unlimited', size: 'standard', thirdParty: { tcgplayer: 42394 }, pricing: { tcgplayer: { '1st-edition': { productId: 42394, marketPrice: 1.5 }, unlimited: { productId: 42394, marketPrice: 0.3 } } } },
+      { type: 'normal', subtype: 'shadowless', size: 'standard', stamp: ['1st-edition'], thirdParty: { tcgplayer: 107047 }, pricing: { tcgplayer: { '1st-edition': { productId: 107047, marketPrice: 6 }, normal: { productId: 107047, marketPrice: 2 } } } },
+      { type: 'normal', subtype: 'shadowless', size: 'standard', thirdParty: { tcgplayer: 107047 }, pricing: { tcgplayer: { '1st-edition': { productId: 107047, marketPrice: 6 }, normal: { productId: 107047, marketPrice: 2 } } } },
+      { type: 'normal', subtype: '1999-2000-copyright', size: 'standard' },
+    ],
+  };
+  const charizard = {
+    id: 'base1-4',
+    localId: '4',
+    name: 'Charizard',
+    rarity: 'Rare',
+    variants: { normal: false, holo: true, reverse: false, firstEdition: true },
+    set: { id: 'base1', name: 'Base Set', cardCount: { official: 102, total: 102 } },
+    pricing: { tcgplayer: { unit: 'USD', 'unlimited-holofoil': { productId: 42382, marketPrice: 300 }, '1st-edition-holofoil': { productId: 42382, marketPrice: 5000 } } },
+    variants_detailed: [
+      { type: 'holo', subtype: 'unlimited', thirdParty: { tcgplayer: 42382 }, pricing: { tcgplayer: { 'unlimited-holofoil': { productId: 42382, marketPrice: 300 }, '1st-edition-holofoil': { productId: 42382, marketPrice: 5000 } } } },
+      { type: 'holo', subtype: 'shadowless', stamp: ['1st-edition'], thirdParty: { tcgplayer: 106999 }, pricing: { tcgplayer: { holofoil: { productId: 106999, marketPrice: 900 }, '1st-edition-holofoil': { productId: 106999, marketPrice: 6000 } } } },
+      { type: 'holo', subtype: 'shadowless', thirdParty: { tcgplayer: 106999 }, pricing: { tcgplayer: { holofoil: { productId: 106999, marketPrice: 900 }, '1st-edition-holofoil': { productId: 106999, marketPrice: 6000 } } } },
+      { type: 'holo', subtype: '1999-2000-copyright' },
+    ],
+  };
+
+  it('prices the plain print run as Unlimited and offers it first, never the shadowless price', async () => {
+    const { fromDex } = await import('./tcgdex');
+    const { unitPrice } = await import('../db/store');
+    const { guessFinish } = await import('../scan/recognize');
+    const card = fromDex(gastly);
+    expect(card.prices).toEqual({ '1st Edition': 1.5, Unlimited: 0.3 });
+    expect(card.variants).toEqual(['Unlimited', '1st Edition']);
+    expect(card.variants).not.toContain('Normal');
+    const finish = guessFinish(card, {}, undefined);
+    expect(finish.variant).toBe('Unlimited');
+    expect(unitPrice(card, finish.variant)).toBe(0.3);
+    expect(card.url).toBe('https://www.tcgplayer.com/product/42394');
+    // A copy saved as "Normal" by an older version is the same card.
+    expect(unitPrice(card, 'Normal')).toBe(0.3);
+  });
+
+  it('values an Unlimited Charizard at the Unlimited Holofoil price, not the shadowless one', async () => {
+    const { fromDex } = await import('./tcgdex');
+    const { unitPrice } = await import('../db/store');
+    const { guessFinish } = await import('../scan/recognize');
+    const card = fromDex(charizard);
+    expect(card.prices).toEqual({ 'Unlimited Holofoil': 300, '1st Edition Holofoil': 5000 });
+    expect(card.variants).toEqual(['Unlimited Holofoil', '1st Edition Holofoil']);
+    expect(unitPrice(card, guessFinish(card, {}, undefined).variant)).toBe(300);
+    expect(unitPrice(card, '1st Edition Holofoil')).toBe(5000);
+  });
+
+  it('drops the card-level price list when it belongs to a shadowless product', async () => {
+    const { fromDex } = await import('./tcgdex');
+    // The plain Unlimited variant has no listing today, so TCGdex's root pricing is the shadowless one.
+    const card = fromDex({
+      ...gastly,
+      pricing: { tcgplayer: { unit: 'USD', '1st-edition': { productId: 107047, marketPrice: 6 }, normal: { productId: 107047, marketPrice: 2 } } },
+      variants_detailed: [{ type: 'normal', subtype: 'unlimited', thirdParty: { tcgplayer: 42394 } }, ...gastly.variants_detailed.slice(1)],
+    });
+    expect(card.prices).toBeUndefined();
+    expect(card.variants).toEqual(['Normal', '1st Edition']);
+    expect(card.url).toBe('https://www.tcgplayer.com/product/42394');
+  });
+
+  it('keeps the card-level price list when the only printings are special foils (Fossil)', async () => {
+    const { fromDex } = await import('./tcgdex');
+    const card = fromDex({
+      id: 'base3-18', localId: '18', name: 'Raichu', variants: { holo: true, firstEdition: true },
+      set: { id: 'base3', name: 'Fossil', cardCount: { official: 62, total: 62 } },
+      pricing: { tcgplayer: { unit: 'USD', 'unlimited-holofoil': { productId: 44426, marketPrice: 20 }, '1st-edition-holofoil': { productId: 44426, marketPrice: 90 } } },
+      variants_detailed: [
+        { type: 'holo', foil: 'galaxy', thirdParty: { tcgplayer: 44426 }, pricing: { tcgplayer: { 'unlimited-holofoil': { productId: 44426, marketPrice: 20 }, '1st-edition-holofoil': { productId: 44426, marketPrice: 90 } } } },
+        { type: 'holo', stamp: ['1st-edition'], foil: 'galaxy', thirdParty: { tcgplayer: 44426 } },
+        { type: 'holo', subtype: '1999-2000-copyright' },
+      ],
+    });
+    expect(card.prices).toEqual({ 'Unlimited Holofoil': 20, '1st Edition Holofoil': 90 });
+    expect(card.variants).toEqual(['Unlimited Holofoil', '1st Edition Holofoil']);
+  });
+
+  it('does not take a jumbo printing’s price for the standard card', async () => {
+    const { fromDex } = await import('./tcgdex');
+    const card = fromDex({
+      id: 'hgss4-101', localId: '101', name: 'Darkrai & Cresselia LEGEND', variants: { holo: true },
+      set: { id: 'hgss4', name: 'Triumphant', cardCount: { official: 102, total: 103 } },
+      pricing: { tcgplayer: null },
+      variants_detailed: [
+        { type: 'holo', size: 'standard', thirdParty: { tcgplayer: 87914 }, pricing: { tcgplayer: null } },
+        { type: 'holo', size: 'jumbo', thirdParty: { tcgplayer: 211449 }, pricing: { tcgplayer: { holofoil: { productId: 211449, marketPrice: 25 } } } },
+      ],
+    });
+    expect(card.prices).toBeUndefined();
+    expect(card.url).toBe('https://www.tcgplayer.com/product/87914');
+  });
+
+  it('names TCGplayer’s own price date in the source, and keeps the fetch time for the refresh', async () => {
+    const { dexPriceSource, fromDex } = await import('./tcgdex');
+    const card = fromDex(gastly);
+    expect(card.priceSource).toBe('TCGplayer market (via TCGdex, prices of 2026-10-12)');
+    expect(card.pricesUpdatedAt!.slice(0, 10)).toBe(new Date().toISOString().slice(0, 10));
+    expect(dexPriceSource(undefined)).toBe('TCGplayer market (via TCGdex)');
+  });
+
+  it('dexVariants: the 1st Edition label follows the base finish; Unlimited replaces Normal only when priced', async () => {
+    const { dexVariants } = await import('./tcgdex');
+    expect(dexVariants({ variants: { normal: true, firstEdition: true } } as never, [])).toEqual(['Normal', '1st Edition']);
+    expect(dexVariants({ variants: { holo: true, firstEdition: true } } as never, ['Unlimited Holofoil', '1st Edition Holofoil'])).toEqual(['Unlimited Holofoil', '1st Edition Holofoil']);
+    expect(dexVariants({ variants: { normal: true, reverse: true } } as never, ['Normal', 'Reverse Holofoil'])).toEqual(['Normal', 'Reverse Holofoil']);
+    // Flagged normal but only ever sold as holofoil: holofoil first.
+    expect(dexVariants({ variants: { normal: true, reverse: true } } as never, ['Holofoil', 'Reverse Holofoil'])).toEqual(['Holofoil', 'Normal', 'Reverse Holofoil']);
+  });
+});
+
+describe('pokemontcg.io fallback finishes', () => {
+  const priced = (id: string, name: string, number: string, set: { id: string; name: string; printedTotal: number; releaseDate?: string }, prices: Record<string, { market: number | null; mid: number | null }>, rarity = 'Rare Holo') => ({
+    ...ptcgCard(id, name, number, set.id, set.printedTotal),
+    rarity,
+    set: { id: set.id, name: set.name, series: 'X', printedTotal: set.printedTotal, total: set.printedTotal, releaseDate: set.releaseDate ?? '2020/01/01' },
+    tcgplayer: { url: `https://www.tcgplayer.com/product/${id}`, prices },
+  });
+
+  it('orders finishes like TCGdex: an Unlimited Charizard is not auto-added as 1st Edition', async () => {
+    const { guessFinish } = await import('../scan/recognize');
+    const { unitPrice } = await import('../db/store');
+    stubFetch([[/pokemontcg\.io.*printedTotal:102/, { data: [priced('base1-4', 'Charizard', '4', { id: 'base1', name: 'Base', printedTotal: 102 }, { '1stEditionHolofoil': { market: 5000, mid: 5200 }, unlimitedHolofoil: { market: 300, mid: 320 } })] }]]);
+    const res = await pokemon.identify({ number: '4', total: '102', name: 'Charizard', nameText: 'Charizard' });
+    const card = res[0]!.card;
+    expect(card.variants).toEqual(['Unlimited Holofoil', '1st Edition Holofoil']);
+    const finish = guessFinish(card, {}, undefined);
+    expect(finish.variant).toBe('Unlimited Holofoil');
+    expect(unitPrice(card, finish.variant)).toBe(300);
+    expect(isConfident(res)).toBe(true);
+  });
+
+  it('a card priced only as reverse holo still offers Normal first', async () => {
+    const { guessFinish } = await import('../scan/recognize');
+    stubFetch([[/pokemontcg\.io.*printedTotal:189/, { data: [priced('swsh3-136', 'Furret', '136', { id: 'swsh3', name: 'Darkness Ablaze', printedTotal: 189 }, { reverseHolofoil: { market: 0.33, mid: 0.4 } }, 'Uncommon')] }]]);
+    const card = (await pokemon.identify({ number: '136', total: '189', name: 'Furret', nameText: 'Furret' }))[0]!.card;
+    expect(card.variants).toEqual(['Normal', 'Holofoil', 'Reverse Holofoil']);
+    expect(card.prices).toEqual({ 'Reverse Holofoil': 0.33 });
+    const flat = guessFinish(card, {}, 0.0);
+    expect(flat.variant).toBe('Normal');
+    expect(flat.confidence).toBeLessThan(1);
+  });
+
+  it('ptcgVariants mirrors dexVariants for every price-key combination', async () => {
+    const { ptcgVariants } = await import('./pokemon');
+    expect(ptcgVariants(['Normal', 'Reverse Holofoil'], 'Common')).toEqual(['Normal', 'Holofoil', 'Reverse Holofoil']);
+    expect(ptcgVariants(['Holofoil', 'Reverse Holofoil'], 'Rare Holo')).toEqual(['Holofoil', 'Normal', 'Reverse Holofoil']);
+    expect(ptcgVariants(['Normal', 'Holofoil', 'Reverse Holofoil'], 'Common')).toEqual(['Holofoil', 'Normal', 'Reverse Holofoil']);
+    expect(ptcgVariants(['1st Edition', 'Unlimited'], 'Common')).toEqual(['Unlimited', '1st Edition']);
+    expect(ptcgVariants(['1st Edition Holofoil', 'Unlimited Holofoil'], 'Rare Holo')).toEqual(['Unlimited Holofoil', '1st Edition Holofoil']);
+    expect(ptcgVariants([], 'Rare Holo')).toEqual(['Holofoil', 'Normal', 'Reverse Holofoil']);
+    expect(ptcgVariants([], 'Common')).toEqual(['Normal', 'Holofoil', 'Reverse Holofoil']);
+  });
+});
+
+describe('ptcgTwin set matching', () => {
+  const dexCard = (id: string, localId: string, name: string, set: { id: string; name: string; official: number }) => ({
+    id, localId, name, rarity: 'Rare', category: 'Pokemon', variants: { holo: true },
+    set: { id: set.id, name: set.name, cardCount: { official: set.official, total: set.official } },
+    pricing: { tcgplayer: null, cardmarket: null },
+    variants_detailed: [{ type: 'holo', thirdParty: { cardmarket: 1 } }],
+  });
+  const hit = (id: string, name: string, number: string, set: { id: string; name: string; printedTotal: number; releaseDate?: string }, price: number) => ({
+    ...ptcgCard(id, name, number, set.id, set.printedTotal),
+    set: { id: set.id, name: set.name, series: 'X', printedTotal: set.printedTotal, total: set.printedTotal, releaseDate: set.releaseDate ?? '2020/01/01' },
+    tcgplayer: { url: `https://www.tcgplayer.com/product/${id}`, prices: { holofoil: { market: price, mid: price } } },
+  });
+  const partial = (key: string, name: string, setName: string, number: string) => ({ game: 'pokemon' as const, key, name, setName, setCode: 'x', number, variants: [], details: {}, source: 'tcgdex', partial: true });
+
+  it('maps TCGdex set ids to pokemontcg.io’s spellings', async () => {
+    const { ptcgSetIds } = await import('./pokemon');
+    expect(ptcgSetIds('sv01')).toContain('sv1');
+    expect(ptcgSetIds('sv03.5')).toContain('sv3pt5');
+    expect(ptcgSetIds('me02.5')).toContain('me2pt5');
+    expect(ptcgSetIds('sm3.5')).toContain('sm35');
+    expect(ptcgSetIds('sm11.5')).toContain('sm115');
+    expect(ptcgSetIds('swsh4.5sv')).toContain('swsh45sv');
+    expect(ptcgSetIds('swsh12.5gg')).toContain('swsh12pt5gg');
+    expect(ptcgSetIds('cel25cc')).toEqual(['cel25c']);
+    expect(ptcgSetIds('swsh9tg')).toEqual(['swsh9tg']);
+    expect(ptcgSetIds('base1')).toEqual(['base1']);
+  });
+
+  it('takes no twin from another set when the only hit is in one (My First Battle)', async () => {
+    stubFetch([
+      [/tcgdex\.net\/v2\/en\/cards\/mfb-7$/, dexCard('mfb-7', '7', 'Pikachu', { id: 'mfb', name: 'My First Battle', official: 48 })],
+      [/pokemontcg\.io.*number:7.*name:"Pikachu"/, { data: [hit('mcd19-7', 'Pikachu', '7', { id: 'mcd19', name: "McDonald's Collection 2019", printedTotal: 12 }, 4.2)] }],
+    ]);
+    const full = await pokemon.complete(partial('mfb-7', 'Pikachu', 'My First Battle', '7/48'));
+    expect(full.prices).toBeUndefined();
+    expect(full.url).not.toContain('mcd19-7');
+  });
+
+  it('picks the same set by id even when the names differ and a newer same-size set exists', async () => {
+    stubFetch([
+      [/tcgdex\.net\/v2\/en\/cards\/sve-001$/, dexCard('sve-001', '001', 'Basic Grass Energy', { id: 'sve', name: 'Scarlet & Violet Energy', official: 8 })],
+      [/pokemontcg\.io.*name:"Basic Grass Energy"/, { data: [
+        hit('me1e-1', 'Basic Grass Energy', '1', { id: 'me1e', name: 'Mega Evolution Energies', printedTotal: 8, releaseDate: '2025/09/26' }, 0.9),
+        hit('sve-1', 'Basic Grass Energy', '1', { id: 'sve', name: 'Scarlet & Violet Energies', printedTotal: 8, releaseDate: '2023/03/31' }, 0.1),
+      ] }],
+    ]);
+    const full = await pokemon.complete(partial('sve-001', 'Basic Grass Energy', 'Scarlet & Violet Energy', '001/8'));
+    expect(full.prices).toEqual({ Holofoil: 0.1 });
+    expect(full.url).toBe('https://www.tcgplayer.com/product/sve-1');
+  });
+
+  it('names WotC-era twin prices as Unlimited on the chips too', async () => {
+    stubFetch([
+      [/tcgdex\.net\/v2\/en\/cards\/base1-50$/, { ...dexCard('base1-50', '50', 'Gastly', { id: 'base1', name: 'Base Set', official: 102 }), variants: { normal: true, firstEdition: true } }],
+      [/pokemontcg\.io.*number:50.*name:"Gastly"/, { data: [{ ...hit('base1-50', 'Gastly', '50', { id: 'base1', name: 'Base', printedTotal: 102 }, 0), tcgplayer: { url: 'https://www.tcgplayer.com/product/42394', prices: { '1stEdition': { market: 1.5, mid: 2 }, unlimited: { market: 0.3, mid: 0.4 } } } }] }],
+    ]);
+    const full = await pokemon.complete(partial('base1-50', 'Gastly', 'Base Set', '50/102'));
+    expect(full.prices).toEqual({ '1st Edition': 1.5, Unlimited: 0.3 });
+    expect(full.variants).toEqual(['Unlimited', '1st Edition']);
+  });
+});
