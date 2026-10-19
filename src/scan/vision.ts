@@ -265,6 +265,8 @@ function loadImage(url: string): Promise<HTMLImageElement | null> {
       img.src = url;
     });
     imageCache.set(url, p);
+    // A failed or timed-out load is tried again next time, not remembered for the session.
+    void p.then((img) => img || imageCache.delete(url));
   }
   return p;
 }

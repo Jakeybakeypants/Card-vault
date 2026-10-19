@@ -228,11 +228,16 @@ function totalAgreement(card: CardPrinting, hints: ScanHints): number | undefine
  * little: the plain and the ex printing then end up close, and the photo (the ex art is
  * different) decides between them. Whole words only, or "Mew ex" would read "Mewtwo" as its own.
  */
-function nameTerm(cardName: string, text: string): number {
+function nameTerm(cardName: string, text: string, read = text): number {
   const full = partialSimilarity(cardName, text);
   const base = cardName.replace(NAME_SUFFIX, '');
   if (full === 1 || base === cardName) return full;
-  return ` ${normalize(text)} `.includes(` ${normalize(base)} `) ? Math.max(full, 0.97) : full;
+  const plain = (s: string): string => normalize(s.replace(/['’]/g, ''));
+  const b = plain(base);
+  // The base name must cover what was read, not be one word of a longer name: "Team Rockets
+  // Mewtwo" is not "Mewtwo ex".
+  const covers = ` ${plain(text)} `.includes(` ${b} `) && b.length >= 0.6 * plain(read).length;
+  return covers ? Math.max(full, 0.97) : full;
 }
 
 function numberAgrees(card: CardPrinting, hints: ScanHints): boolean | undefined {
@@ -249,7 +254,7 @@ function numberAgrees(card: CardPrinting, hints: ScanHints): boolean | undefined
 function nameMatch(card: CardPrinting, hints: ScanHints): number | undefined {
   const texts = [hints.name, hints.nameText].filter((t): t is string => !!t);
   if (!texts.length) return undefined;
-  return Math.max(...texts.map((t) => nameTerm(card.name, t)));
+  return Math.max(...texts.map((t) => nameTerm(card.name, t, hints.name ?? t)));
 }
 
 function score(card: CardPrinting, hints: ScanHints): number {
@@ -266,7 +271,8 @@ function score(card: CardPrinting, hints: ScanHints): number {
 /** Which of the scan's signals this printing agrees with, for `isConfident`. */
 function signals(card: CardPrinting, hints: ScanHints): Candidate['signals'] {
   const [, total] = printedNumber(card);
-  const setRead = !!(hints.total || hints.setCode || hints.setName);
+  // A promo prefix carried by the number itself (SM78, SWSH120) names the set as well.
+  const setRead = !!(hints.total || hints.setCode || hints.setName || promoSet(hints));
   return {
     name: nameMatch(card, hints),
     number: numberAgrees(card, hints),
@@ -456,7 +462,11 @@ export const pokemon: Game = {
     // number and set size), keeping the saved identity so the collection row doesn't move.
     const [num, total] = card.number.split('/');
     if (num && total) {
-      const twin = (await dexByNumber(num, total).catch(() => [])).find((c) => partialSimilarity(c.name, card.name) > 0.9);
+      // Two sets of one size can share a number and a name (Cosmog 100/236 in Unified Minds and
+      // Cosmic Eclipse): the twin has to be the same set.
+      const twin = (await dexByNumber(num, total).catch(() => [])).find(
+        (c) => partialSimilarity(c.name, card.name) > 0.9 && (ptcgSetIds(setIdOf(c.key)).includes(setIdOf(card.key)) || normalize(c.setName) === normalize(card.setName)),
+      );
       if (twin?.prices) return { ...card, prices: twin.prices, priceSource: twin.priceSource, pricesUpdatedAt: twin.pricesUpdatedAt, variants: twin.variants };
     }
     const res = await getJsonOrNull<{ data: PtcgCard }>(`${PTCG}/${encodeURIComponent(card.key)}`).catch(() => null);

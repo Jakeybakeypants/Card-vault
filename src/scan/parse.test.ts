@@ -208,7 +208,9 @@ describe('Pokémon sizes with a stray digit (P3)', () => {
     expect(parsePokemon({ bottom: 'BY svis| 166/198 &' })).toMatchObject({ number: '166', total: '198' });
     expect(parsePokemon({ bottom: '7\n\n/ into the shadows\n\n10/114 %' })).toMatchObject({ number: '10', total: '114' });
     expect(parsePokemon({ bottom: '4\n\nx2\n\n/\n\nII RIN' }).number).toBeUndefined();
-    expect(parsePokemon({ bottom: 'ULI 2/13 plliod' }).number).toBeUndefined();
+    // Digits on both sides but no printed pair: the number stands on its own, without a size.
+    const lone = parsePokemon({ bottom: 'ULI 2/13 plliod' });
+    expect([lone.number, lone.total]).toEqual(['2', undefined]);
     // A size the table does not know yet (a brand-new set) still reads.
     expect(parsePokemon({ bottom: 'H NEW EN 045/250' })).toMatchObject({ number: '045', total: '250' });
   });
@@ -380,5 +382,23 @@ describe('name strip without the pre-evolution', () => {
     expect(h.nameText).not.toMatch(/Weedle/);
     expect(h.nameText).toMatch(/Kakuna/);
     expect(withoutEvolutionText('Evolves from Kadabra\nAlakazam 80 HP')).toBe('Alakazam 80 HP');
+  });
+});
+
+describe('a number beside junk digits', () => {
+  it('keeps the number on its own, so the close second look has to agree with it', () => {
+    const pair = (bottom: string) => [parsePokemon({ bottom }).number, parsePokemon({ bottom }).total];
+    expect(pair('69/13')).toEqual(['69', undefined]);
+    expect(pair('gies 218/001 @')).toEqual(['218', undefined]);
+    expect(parsePokemon({ bottom: '4\n\n/ can locate 5/83 x' })).toMatchObject({ number: '5', total: '83' });
+    expect(mergeSecondLook({ number: '69' }, { number: '89', total: '130' }, '89/1300')).toEqual({ number: '69', total: undefined });
+  });
+});
+
+describe('junk joined to the name by a bracket', () => {
+  it('splits the stage box off the name', () => {
+    expect(parsePokemon({ name: '=c)Ho-Oh 130@®' }).name).toBe('Ho-Oh');
+    expect(parsePokemon({ name: 'sasc)Roselia ~~ 70 |' }).name).toBe('Roselia');
+    expect(parsePokemon({ name: 'sec/Emolga 70 HP' }).name).toBe('Emolga');
   });
 });

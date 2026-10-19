@@ -106,16 +106,25 @@ const productIdsOf = (tp: DexTcgplayer): number[] =>
  * printing that has prices", which for a Base Set card can be the shadowless or jumbo product: it
  * is left out when a plain printing exists and it belongs to one of the other printings.
  */
-function plainPriceLists(card: DexCard): DexTcgplayer[] {
+/**
+ * Whether the card-level price guides belong to one of the other printings: TCGdex copies them
+ * from the first printing with prices, which can be the shadowless product when the plain one
+ * has no listing that day. The TCGplayer product ids tell.
+ */
+function rootIsForeign(card: DexCard): boolean {
   const plain = plainVariants(card);
-  const lists = plain.map((v) => v.pricing?.tcgplayer ?? null);
   const root = card.pricing?.tcgplayer ?? null;
-  if (!root) return lists;
+  if (!root) return false;
   const plainIds = new Set(plain.map((v) => v.thirdParty?.tcgplayer));
   const otherIds = new Set((card.variants_detailed ?? []).filter((v) => !plain.includes(v)).map((v) => v.thirdParty?.tcgplayer));
   const ids = productIdsOf(root);
-  const foreign = plain.length > 0 && ids.length > 0 && ids.every((id) => otherIds.has(id) && !plainIds.has(id));
-  return foreign ? lists : [root, ...lists];
+  return plain.length > 0 && ids.length > 0 && ids.every((id) => otherIds.has(id) && !plainIds.has(id));
+}
+
+function plainPriceLists(card: DexCard): DexTcgplayer[] {
+  const lists = plainVariants(card).map((v) => v.pricing?.tcgplayer ?? null);
+  const root = card.pricing?.tcgplayer ?? null;
+  return !root || rootIsForeign(card) ? lists : [root, ...lists];
 }
 
 /**
@@ -244,7 +253,10 @@ export function partialFromBrief(b: DexBrief): CardPrinting {
 /** A full card plus its Cardmarket prices (EUR), which `fromDex` leaves out. */
 export async function dexCardWithMarket(id: string): Promise<{ card: CardPrinting; cardmarket?: DexCardmarket } | null> {
   const c = await getJsonOrNull<DexCard>(`${API}/cards/${encodeURIComponent(id)}`);
-  return c ? { card: fromDex(c), cardmarket: c.pricing?.cardmarket ?? plainVariants(c).find((v) => v.pricing?.cardmarket)?.pricing?.cardmarket ?? undefined } : null;
+  if (!c) return null;
+  // Same ownership rule as the TCGplayer lists: the root guide can be the shadowless product's.
+  const cardmarket = plainVariants(c).find((v) => v.pricing?.cardmarket)?.pricing?.cardmarket ?? (rootIsForeign(c) ? undefined : c.pricing?.cardmarket ?? undefined);
+  return { card: fromDex(c), cardmarket };
 }
 
 // TCG Pocket (the mobile game) shares the catalog; its sets are never physical cards.
@@ -313,7 +325,7 @@ export async function dexByName(name: string, number?: string): Promise<CardPrin
   const physical = list.filter((b) => !isPocketSet(setIdOf(b.id)));
   const withNumber = number ? physical.filter((b) => sameCollectorNumber(b.localId, number)) : [];
   const near = number ? physical.filter((b) => !withNumber.includes(b) && nearNumber(b.localId, number)) : [];
-  const kept = withNumber.length || near.length ? [...withNumber, ...near] : physical;
+  const kept = withNumber.length ? [...withNumber, ...near] : physical;
   return kept.map((b) => {
     const card = partialFromBrief(b);
     const set = setById.get(setIdOf(b.id));

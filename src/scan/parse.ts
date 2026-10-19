@@ -196,7 +196,11 @@ function readNumberPair(m: RegExpMatchArray): NumberRead | undefined {
   }
   combos.sort((a, b) => Number(b.plausible) - Number(a.plausible) || b.rank - a.rank);
   const pick = combos.find((c) => c.plausible || c.fallback);
-  return pick && { index: pick.index, slash: pick.slash, number: pick.number, total: pick.total, plausible: pick.plausible };
+  if (pick) return { index: pick.index, slash: pick.slash, number: pick.number, total: pick.total, plausible: pick.plausible };
+  // A plain number beside a size read as junk digits ("69/13", "218/001"): the number stands on
+  // its own, below any pair, so a close second look has to agree with it rather than replace it.
+  if (/^\d{1,3}[ab]?$/.test(m[1]!) && /^\d+$/.test(m[2]!) && Number(m[1]!.replace(/[ab]$/, '')) > 0) return { ...base, number: m[1]!, plausible: false };
+  return undefined;
 }
 
 const POKEMON_LANGUAGES = new Set(['EN', 'DE', 'FR', 'IT', 'ES', 'PT', 'JP', 'KR']);
@@ -532,6 +536,9 @@ function guessName(text: string, noise: Set<string>): string | undefined {
       .replace(PUT_ON, ' ')
       .replace(HP_TOKENS, ' ')
       .split(/\s+/)
+      // A stage box read as lowercase junk joined to the name by its closing bracket:
+      // "sasc)Roselia", "sec/Emolga", "=c)Ho-Oh".
+      .flatMap((w) => w.split(/(?<=[a-z0-9])[)/|\\\]}]+(?=[A-Z])/))
       // Icon noise glued to the word: "2°<)”Kadabra", "Blastoise@Y", "l/Caruledee".
       .map((w) => w.replace(/^[^A-Za-z]+/, '').replace(/^([A-Za-z][A-Za-z'’.&!:-]*).*$/, '$1').replace(/[^A-Za-z0-9!]+$/, ''))
       // "AlcremieV", "LaprasVimax": the V / VMAX / VSTAR glued to the name.

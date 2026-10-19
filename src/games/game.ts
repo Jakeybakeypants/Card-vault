@@ -74,7 +74,11 @@ export function isConfident(candidates: Candidate[]): boolean {
   const sameName = rest.filter((c) => baseName(c.card.name) === baseName(top.card.name));
   // The photo prefers another printing of the same name: the text probably misled.
   if (sameName.some((c) => c.visual !== undefined && c.visual > photo + 0.1)) return false;
-  if (name >= NAME_READ && s.number && photo >= PHOTO_CONFIRMS) return true;
+  // The photo only confirms the top one when every printing that reads the same on text (same
+  // line, name read as well) was compared too: a same-art reprint whose picture failed to load
+  // would otherwise lose to its twin on the photo alone.
+  const uncomparedTwin = rest.some((c) => c.visual === undefined && c.signals?.number && c.signals?.set && (c.signals.name ?? 0) >= name - 0.05);
+  if (name >= NAME_READ && s.number && photo >= PHOTO_CONFIRMS) return !uncomparedTwin;
   if (name >= NAME_SURE && s.number && s.set) return !rest.some((c) => (c.signals?.name ?? 0) >= name - 0.05 && nearLine(c.card, top.card));
   if (s.number && s.set) return photo >= 0.6;
   return name >= NAME_READ && photo >= PHOTO_CONFIRMS;

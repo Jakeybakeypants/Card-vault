@@ -510,6 +510,23 @@ describe('WotC-era prices and finishes (TCGdex)', () => {
     expect(card.url).toBe('https://www.tcgplayer.com/product/42394');
   });
 
+  it('never prices the plain card from the shadowless product’s Cardmarket guide either', async () => {
+    // Base Set Charizard as served when the Unlimited product has no listing: TCGdex copies the
+    // shadowless product's guides (TCGplayer and Cardmarket) to the card level.
+    const shadowless = { tcgplayer: { unit: 'USD', holofoil: { productId: 106999, marketPrice: 900 }, '1st-edition-holofoil': { productId: 106999, marketPrice: 6000 } }, cardmarket: { unit: 'EUR', trend: 500, avg30: 480 } };
+    stubFetch([
+      [/frankfurter/, { rates: { USD: 1.1 } }],
+      [/cards\/base1-4$/, {
+        ...charizard,
+        pricing: shadowless,
+        variants_detailed: [{ type: 'holo', subtype: 'unlimited', thirdParty: { tcgplayer: 42382 }, pricing: null }, { type: 'holo', subtype: 'shadowless', stamp: ['1st-edition'], thirdParty: { tcgplayer: 106999 }, pricing: shadowless }, { type: 'holo', subtype: 'shadowless', thirdParty: { tcgplayer: 106999 }, pricing: shadowless }],
+      }],
+    ]);
+    const card = await pokemon.complete({ game: 'pokemon', key: 'base1-4', name: 'Charizard', setName: 'Base Set', setCode: 'x', number: '4/102', variants: [], details: {}, source: 'tcgdex', partial: true });
+    expect(card.prices).toBeUndefined();
+    expect(card.url).toBe('https://www.tcgplayer.com/product/42382');
+  });
+
   it('keeps the card-level price list when the only printings are special foils (Fossil)', async () => {
     const { fromDex } = await import('./tcgdex');
     const card = fromDex({
@@ -617,6 +634,23 @@ describe('ptcgTwin set matching', () => {
   });
   const partial = (key: string, name: string, setName: string, number: string) => ({ game: 'pokemon' as const, key, name, setName, setCode: 'x', number, variants: [], details: {}, source: 'tcgdex', partial: true });
 
+  it('refreshes a pokemontcg.io save from its own set, not another set of the same size', async () => {
+    const priced = (id: string, localId: string, set: { id: string; name: string; official: number }, price: number) => ({
+      id, localId, name: 'Cosmog', image: `https://assets.example/${id}`, rarity: 'Common', category: 'Pokemon', variants: { normal: true },
+      set: { id: set.id, name: set.name, cardCount: { official: set.official, total: set.official } },
+      pricing: { tcgplayer: { unit: 'USD', normal: { productId: price, marketPrice: price } } },
+    });
+    stubFetch([
+      [/tcgdex\.net\/v2\/en\/sets$/, [{ id: 'sm11', name: 'Unified Minds', cardCount: { official: 236, total: 258 } }, { id: 'sm12', name: 'Cosmic Eclipse', cardCount: { official: 236, total: 271 } }]],
+      [/sets\/sm12\/100$/, priced('sm12-100', '100', { id: 'sm12', name: 'Cosmic Eclipse', official: 236 }, 9)],
+      [/sets\/sm11\/100$/, priced('sm11-100', '100', { id: 'sm11', name: 'Unified Minds', official: 236 }, 0.2)],
+    ]);
+    const saved = { game: 'pokemon' as const, key: 'sm11-100', name: 'Cosmog', setName: 'Unified Minds', setCode: 'UNM', number: '100/236', variants: ['Normal'], details: {}, source: 'pokemontcg.io' };
+    const fresh = await pokemon.refresh(saved);
+    expect(fresh?.prices).toEqual({ Normal: 0.2 });
+    expect(fresh?.key).toBe('sm11-100');
+  });
+
   it('maps TCGdex set ids to pokemontcg.io’s spellings', async () => {
     const { ptcgSetIds } = await import('./pokemon');
     expect(ptcgSetIds('sv01')).toContain('sv1');
@@ -669,6 +703,16 @@ describe('isConfident: two agreeing signals', () => {
   const printing = (key: string, name: string, number: string): CardPrinting => ({ game: 'pokemon', key, name, setName: 's', setCode: 's', number, variants: [], details: {}, source: 'test' });
   const cand = (key: string, name: string, number: string, score: number, signals?: Candidate['signals'], visual?: number): Candidate => ({ card: printing(key, name, number), score, signals, visual });
   const read = { name: 1, number: true, set: true };
+
+  it('does not let the photo decide between same-art twins when one picture could not be compared', () => {
+    // Base Set Charizard and its Classic Collection reprint both print "4/102" and the same art.
+    const compared = [cand('base1-4', 'Charizard', '4/102', 0.97, read, 0.9), cand('cel25cc-CC002', 'Charizard', '4/102', 0.805, read, 0.5)];
+    expect(isConfident(compared)).toBe(true);
+    const twinNotLoaded = [cand('base1-4', 'Charizard', '4/102', 0.97, read, 0.9), cand('cel25cc-CC002', 'Charizard', '4/102', 0.805, read, undefined)];
+    expect(isConfident(twinNotLoaded)).toBe(false);
+    // An uncompared card that does not read the same (another number) changes nothing.
+    expect(isConfident([cand('base1-4', 'Charizard', '4/102', 0.97, read, 0.9), cand('base1-5', 'Clefairy', '5/102', 0.4, { name: 0.1, number: false, set: true }, undefined)])).toBe(true);
+  });
 
   it('adds on name + number + set alone when no same-name neighbour is in the running', () => {
     expect(isConfident([cand('a-25', 'Pikachu', '25/198', 1, read), cand('b-25', 'Snorlax', '25/198', 0.6, { name: 0.2, number: true, set: true })])).toBe(true);
@@ -742,6 +786,47 @@ describe('lookups that survive one OCR slip', () => {
     expect(res[0]!.score).toBeCloseTo(0.97, 2);
     expect(pokemon.score(res[1]!.card, hints)).toBeLessThan(0.7);
     expect(isConfident(res)).toBe(false);
+  });
+
+  it("ranks an owner's card above the plain Pokémon's ex/V/EX printings when the owner's name was read", async () => {
+    const found = [brief('me02.5-281', '281', "Team Rocket's Mewtwo ex"), brief('sv04-058', '058', 'Mewtwo ex'), brief('swsh10.5-030', '030', 'Mewtwo V'), brief('xy8-61', '61', 'Mewtwo EX'), brief('sm3.5-39', '39', 'Mewtwo GX'), brief('me02.5-161', '161', "Team Rocket's Meowth")];
+    stubFetch([[/tcgdex\.net\/v2\/en\/sets$/, sets], [/cards\?name=/, found]]);
+    const hints = { name: 'Team Rockets Mewtwo', nameText: '|\nrr Team Rockets Mewtwo (2X 280 © |', nameCandidates: ['Rockets', 'Mewtwo', 'Team'] };
+    const res = await pokemon.identify(hints);
+    expect(res[0]!.card.key).toBe('me02.5-281');
+    expect(res[0]!.score).toBeCloseTo(0.97, 2);
+    for (const c of res.slice(1)) expect(c.score).toBeLessThan(0.9);
+  });
+
+  it('keeps every printing of a name when the read number matches none of them exactly', async () => {
+    const { dexByName } = await import('./tcgdex');
+    stubFetch([[/tcgdex\.net\/v2\/en\/sets$/, sets], [/cards\?name=Aron/, [brief('ex1-49', '49', 'Aron'), brief('ex1-50', '50', 'Aron'), brief('ex1-59', '59', 'Aron'), brief('sv06-123', '123', 'Aron')]]]);
+    expect((await dexByName('Aron', '51')).map((c) => c.key)).toEqual(['ex1-49', 'ex1-50', 'ex1-59', 'sv06-123']);
+    // With an exact hit, its one-digit neighbours come along for the photo to judge.
+    clearHttpCache();
+    expect((await dexByName('Aron', '50')).map((c) => c.key)).toEqual(['ex1-50', 'ex1-59']);
+  });
+
+  it('counts a promo prefix on the number as the set, so a promo with an unreadable name is added on the photo', async () => {
+    const { resolve } = await import('../scan/recognize');
+    stubFetch([[/tcgdex\.net\/v2\/en\/sets$/, sets], [/sets\/smp\/SM78$/, dex('smp-SM78', 'SM78', 'Tapu Koko', { id: 'smp', name: 'SM Black Star Promos', official: 0 })]]);
+    const hints = { name: 'ENTRENADOR Estadio', nameText: 'ENTRENADOR | Estadio', number: 'SM78' };
+    const res = await pokemon.identify(hints);
+    expect(res.map((c) => c.card.key)).toEqual(['smp-SM78']);
+    expect(res[0]!.signals).toMatchObject({ number: true, set: true });
+    for (const [visual, confident] of [[0.3, false], [0.95, true]] as const) {
+      clearHttpCache();
+      VISUAL.clear();
+      VISUAL.set('smp-SM78', visual);
+      const out = await resolve('pokemon', hints, {} as HTMLCanvasElement);
+      expect(out[0]!.card.key).toBe('smp-SM78');
+      expect(isConfident(out)).toBe(confident);
+    }
+    // A set code read as a promo code beside a size is doubtful: not a set signal.
+    clearHttpCache();
+    stubFetch([[/tcgdex\.net\/v2\/en\/sets$/, sets], [/sets\/svp\/005$/, dex('svp-005', '005', 'Quaquaval', { id: 'svp', name: 'SVP Black Star Promos', official: 0 })], [/sets\/sv01\/005$/, dex('sv01-005', '005', 'Cacnea', sv1)]]);
+    const doubtful = await pokemon.identify(parsePokemon({ name: '', bottom: 'H SVP EN 005/198' }));
+    expect(doubtful.find((c) => c.card.key === 'svp-005')!.signals!.set).not.toBe(true);
   });
 
   it('looks a set code read as the promo code up by size as well, and counts the code for nothing', async () => {
