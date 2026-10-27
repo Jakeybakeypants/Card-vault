@@ -1,0 +1,64 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -n \"$MC_TOKEN\" ] && curl -s -m 5 -X POST 'https://soft-truth-5cea.rgsz9y5nvt.workers.dev/api/hook/claude?agent=claude-cloud&name=Claude%20Code%20(cloud)' -H \"Authorization: Bearer $MC_TOKEN\" -H 'Content-Type: application/json' --data-binary @- >/dev/null; true"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -n \"$MC_TOKEN\" ] && curl -s -m 5 -X POST 'https://soft-truth-5cea.rgsz9y5nvt.workers.dev/api/hook/claude?agent=claude-cloud&name=Claude%20Code%20(cloud)' -H \"Authorization: Bearer $MC_TOKEN\" -H 'Content-Type: application/json' --data-binary @- >/dev/null; true"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -n \"$MC_TOKEN\" ] && curl -s -m 5 -X POST 'https://soft-truth-5cea.rgsz9y5nvt.workers.dev/api/hook/claude?agent=claude-cloud&name=Claude%20Code%20(cloud)' -H \"Authorization: Bearer $MC_TOKEN\" -H 'Content-Type: application/json' --data-binary @- >/dev/null; true"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -n \"$MC_TOKEN\" ] && curl -s -m 5 -X POST 'https://soft-truth-5cea.rgsz9y5nvt.workers.dev/api/hook/claude?agent=claude-cloud&name=Claude%20Code%20(cloud)' -H \"Authorization: Bearer $MC_TOKEN\" -H 'Content-Type: application/json' --data-binary @- >/dev/null; true"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -n \"$MC_TOKEN\" ] && curl -s -m 5 -X POST 'https://soft-truth-5cea.rgsz9y5nvt.workers.dev/api/hook/claude?agent=claude-cloud&name=Claude%20Code%20(cloud)' -H \"Authorization: Bearer $MC_TOKEN\" -H 'Content-Type: application/json' --data-binary @- >/dev/null; true"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -n \"$MC_TOKEN\" ] && curl -s -m 5 -X POST 'https://soft-truth-5cea.rgsz9y5nvt.workers.dev/api/hook/claude?agent=claude-cloud&name=Claude%20Code%20(cloud)' -H \"Authorization: Bearer $MC_TOKEN\" -H 'Content-Type: application/json' --data-binary @- >/dev/null; true"
+          }
+        ]
+      }
+    ]
+  }
+}
